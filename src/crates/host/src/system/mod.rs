@@ -54,6 +54,7 @@ pub struct System {
 }
 impl System {
     pub fn new(identifier: String) -> Self {
+        target::begin_background_activity();
         Self {
             identifier,
             cached: Mutex::new(None),

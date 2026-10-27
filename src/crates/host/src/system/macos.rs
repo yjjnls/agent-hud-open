@@ -6,7 +6,7 @@ use objc2::{
     rc::Retained,
     runtime::{AnyClass, AnyObject, Bool},
 };
-use objc2_foundation::{NSBundle, NSError};
+use objc2_foundation::{NSBundle, NSError, NSString};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 #[link(name = "ServiceManagement", kind = "framework")]
@@ -14,6 +14,27 @@ unsafe extern "C" {}
 fn bundled() -> bool {
     let bundle = NSBundle::mainBundle();
     bundle.bundlePath().to_string().ends_with(".app") && bundle.bundleIdentifier().is_some()
+}
+/// macOS naps accessory apps with no visible window: their timers and file
+/// watchers run seconds to minutes late. Live session tracking dies of that
+/// — a remote turn's heartbeat lapses before the delayed watch fires — so a
+/// background activity claim is taken once for the process. It exempts the
+/// app from napping while holding no sleep: neither the display's nor the
+/// machine's. The claim lives as long as the returned token, which is never
+/// released.
+pub(super) fn begin_background_activity() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let Some(class) = AnyClass::get(c"NSProcessInfo") else {
+            return;
+        };
+        let info: Retained<AnyObject> = msg_send![class, processInfo];
+        let reason = NSString::from_str("agent HUD tracks live sessions");
+        // NSActivityBackground.
+        let activity: Retained<AnyObject> =
+            msg_send![&*info, beginActivityWithOptions: 0xffu64, reason: &*reason];
+        std::mem::forget(activity);
+    });
 }
 fn service() -> Option<Retained<AnyObject>> {
     if !bundled() {

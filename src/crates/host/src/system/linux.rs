@@ -64,6 +64,8 @@ pub(super) fn register_if_never_registered() -> bool {
     false
 }
 
+pub(super) fn begin_background_activity() {}
+
 pub(super) fn cli_candidates(_home: &Path, command: &str, dirs: Vec<PathBuf>) -> Vec<PathBuf> {
     dirs.into_iter().map(|dir| dir.join(command)).collect()
 }
