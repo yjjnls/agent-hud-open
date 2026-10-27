@@ -452,6 +452,12 @@ impl HookEvidence {
                 } else {
                     Value::Null
                 };
+                // An observer sees only the session's phase, never which tool
+                // runs, so a live one reports the generic thinking look rather
+                // than no animation at all. Never overwrite a richer reading.
+                if facts["activity"].is_null() && state != "idle" {
+                    facts["activity"] = json!({"work":"thinking","openCall":null,"toolAt":iso(observed.at_ms),"delegating":false,"awaitsModel":false,"retrying":false,"compactingSince":null});
+                }
                 session["navigationTarget"] = observed.data["navigationTarget"].clone();
             }
         }
@@ -640,6 +646,25 @@ mod tests {
         assert_eq!(rows[0]["state"], "idle");
         assert_eq!(rows[0]["liveFacts"]["outcome"], "completed");
         assert_eq!(rows[0]["liveFacts"]["endedAt"], iso(at));
+    }
+
+    /// An observer-only session carries no tool activity, so a live one still
+    /// animates the bot with the generic thinking look, and a finished one
+    /// reports no activity at all.
+    #[test]
+    fn a_live_observation_animates_the_bot_but_a_finished_one_does_not() {
+        let at = 1_792_470_000_000i64;
+        let mut evidence = HookEvidence::default();
+        evidence.ingest(&[observation("running", at)], at);
+        let rows = evidence.extra_sessions(at, 1, &HashSet::new());
+        assert_eq!(rows[0]["liveFacts"]["activity"]["work"], "thinking");
+
+        let mut done = observation("completed", at + 1000);
+        done.data["outcome"] = json!("completed");
+        evidence.ingest(&[done], at + 1000);
+        let rows = evidence.extra_sessions(at + 1000, 1, &HashSet::new());
+        assert_eq!(rows[0]["state"], "idle");
+        assert!(rows[0]["liveFacts"]["activity"].is_null());
     }
 
     /// The remote poller reports another machine's sessions with the user's
