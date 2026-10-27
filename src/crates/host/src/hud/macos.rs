@@ -539,3 +539,101 @@ fn configure(
         })
     })
 }
+
+/// A HUD panel never activates the app, and WebKit is reported to stop
+/// committing composited frames to the windows of an inactive app: the bots
+/// would freeze at whatever frame they were last drawn at. `launchctl setenv
+/// AGENTHUD_ACTIVATE_KEEPALIVE 1` opts into re-asserting the app's active
+/// state once a second while a HUD is on screen; the panel cannot become key,
+/// so keyboard focus stays wherever the user put it, and the loop pauses when
+/// no HUD is visible or one of the app's own windows is key.
+pub(crate) fn install_activation_keepalive(app: &tauri::AppHandle) {
+    let handle = app.clone();
+    let _ = std::thread::Builder::new()
+        .name("agenthud-active".into())
+        .spawn(move || {
+            const PACE: Duration = Duration::from_millis(900);
+            loop {
+                std::thread::sleep(PACE);
+                if handle
+                    .run_on_main_thread(|| {
+                        let Some(marker) = MainThreadMarker::new() else {
+                            return;
+                        };
+                        let application = NSApplication::sharedApplication(marker);
+                        // Diagnostic: when AGENTHUD_DEBUG_NOTE names a file, record what
+                        // AppKit believes about activity and per-window occlusion — the
+                        // two readings WebKit's visibility tracking is built from.
+                        if let Some(path) = std::env::var_os("AGENTHUD_DEBUG_NOTE") {
+                            if let Ok(mut file) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&path)
+                            {
+                                use std::io::Write;
+                                let frontmost_is_us = NSWorkspace::sharedWorkspace()
+                                    .frontmostApplication()
+                                    .is_some_and(|frontmost| {
+                                        frontmost.isEqual(Some(&NSRunningApplication::currentApplication()))
+                                    });
+                                let mut note = format!(
+                                    "{} host active={} frontmost_is_us={frontmost_is_us}\n",
+                                    chrono::Local::now().to_rfc3339_opts(
+                                        chrono::SecondsFormat::Millis,
+                                        true
+                                    ),
+                                    application.isActive(),
+                                );
+                                for window in application.windows().iter() {
+                                    if window.isVisible() {
+                                        let frame = window.frame();
+                                        note.push_str(&format!(
+                                            "  occlusion={} key={} level={} frame=({:.0},{:.0} {:.0}x{:.0}) screen={:?}\n",
+                                            window.occlusionState().0,
+                                            window.isKeyWindow(),
+                                            window.level(),
+                                            frame.origin.x,
+                                            frame.origin.y,
+                                            frame.size.width,
+                                            frame.size.height,
+                                            window.screen()
+                                                .map(|screen| screen.localizedName()
+                                                    .to_string()),
+                                        ));
+                                    }
+                                }
+                                let _ = writeln!(file, "{note}");
+                            }
+                        }
+                        let hud_on_screen = application
+                            .windows()
+                            .iter()
+                            .any(|window| {
+                                window.isVisible() && window.isKindOfClass(objc2::class!(NSPanel))
+                            });
+                        if !hud_on_screen {
+                            return;
+                        }
+                        // A key window of ours is one the user explicitly chose; let it
+                        // speak for the app instead of forcing another activation.
+                        if application.keyWindow().is_some() {
+                            return;
+                        }
+                        // Opt-in: re-asserting active state every pass trades a
+                        // flicker risk in the menu bar for keeping WebKit's frame
+                        // commits flowing while the HUD is on screen; the nightly
+                        // investigation could not measure the flicker (the machine
+                        // was screen-locked), so it ships behind this valve.
+                        if std::env::var_os("AGENTHUD_ACTIVATE_KEEPALIVE").is_none() {
+                            return;
+                        }
+                        #[allow(deprecated)]
+                        application.activateIgnoringOtherApps(true);
+                    })
+                    .is_err()
+                {
+                    return; // The app is shutting down.
+                }
+            }
+        });
+}

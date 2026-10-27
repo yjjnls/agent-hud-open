@@ -721,6 +721,23 @@ fn take_settings_page(windows: tauri::State<'_, AuxiliaryWindows>) -> Option<Str
         .and_then(|mut pending| pending.take())
 }
 
+/// A page's own note about its runtime, appended where AGENTHUD_DEBUG_NOTE
+/// names, when that valve is set: a window webviews cannot tell the outside
+/// about any other way.
+#[tauri::command]
+fn debug_note(note: String) {
+    if let Some(path) = std::env::var_os("AGENTHUD_DEBUG_NOTE") {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "{note}");
+        }
+    }
+}
+
 /// Settings, on `page` when the HUD names one, as a card's Open Agent
 /// plugins does.
 #[tauri::command]
@@ -898,6 +915,7 @@ pub fn run_with_options(
             hud::hud_drag_start,
             hud::hud_text_focus,
             hud_show_main,
+            debug_note,
             quit_app,
             open_statistics,
             take_statistics_target,
@@ -977,6 +995,7 @@ pub fn run_with_options(
             screens::install(app)?;
             shell::install(app.handle());
             coordinator::start(app.handle())?;
+            hud::install_activation_keepalive(app.handle());
             // Keep the claimed lock throughout setup, but accept handovers
             // only once Settings and every command owner can answer them.
             if let Some(lock) = instance {

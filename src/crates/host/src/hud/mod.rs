@@ -52,6 +52,12 @@ pub use input::{hud_report_regions, hud_text_focus};
 pub(crate) use plans::{Planner, Screen};
 pub use types::*;
 
+// The other platforms' webviews animate the windows of an inactive app.
+#[cfg(target_os = "macos")]
+pub(crate) use host::install_activation_keepalive;
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn install_activation_keepalive(_app: &tauri::AppHandle) {}
+
 #[derive(Default)]
 pub struct HudWindows(Arc<Mutex<HashMap<String, Arc<Shared>>>>);
 

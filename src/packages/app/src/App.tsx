@@ -50,6 +50,7 @@ import {
 import { useHUD } from "./lib/use-hud";
 import { useWindowActivity } from "./lib/use-window-activity";
 import { useBotDirections } from "./lib/use-bot-directions";
+import { startAnimationKeepalive } from "./lib/animation-keepalive";
 import {
   getScreenHUDConfig,
   useHUDConfig,
@@ -333,6 +334,28 @@ function AppContent({
       else toast.error(title, { description });
     }
   }, [settings, windowActive, snapshot?.requestDeliveries]);
+  useEffect(() => {
+    if (surface) startAnimationKeepalive();
+  }, [surface]);
+  // Diagnostic: report the page's own view of visibility and its animation
+  // pulse to the host, which appends it where AGENTHUD_DEBUG_NOTE names.
+  useEffect(() => {
+    if (!surface || !isTauri()) return;
+    let frames = 0;
+    const pulse = () => {
+      frames += 1;
+      requestAnimationFrame(pulse);
+    };
+    requestAnimationFrame(pulse);
+    const clock = setInterval(() => {
+      void invoke("debug_note", {
+        note: `${new Date().toISOString()} label=${getCurrentWebviewWindow().label} vis=${document.visibilityState} raf=${frames}`,
+      }).catch(() => {});
+    }, 1000);
+    return () => {
+      clearInterval(clock);
+    };
+  }, [surface]);
   const botDirections = useBotDirections(surface && windowActive);
   const measured = geometries[selectedId] ?? null;
   const selectedMonitor = monitors.find(
