@@ -78,12 +78,13 @@ test("a Simple panel shows windows' agents, then the agents billed by balance al
   ]);
 });
 
-test("the notch glow shows windows with a level, then balances", () => {
+test("the notch glow shows windows with a level, then balances, then recent sessions", () => {
   assert.deepEqual(restingAgents(snapshot, "notch", now).order, [
     "claude",
     "deepseek",
-    "kimi",
+    "opencode",
     "cursor",
+    "kimi",
   ]);
 });
 

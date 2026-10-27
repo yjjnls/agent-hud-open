@@ -68,6 +68,10 @@ pub(crate) fn prepare(app: &tauri::AppHandle) {
 
 pub(crate) fn start(app: &tauri::AppHandle) -> Result<(), String> {
     let app = app.clone();
+    // The macOS host only measures displays on screen-parameter notifications.
+    // Wake the planner once so the HUD windows exist even when the displays
+    // are asleep at launch: until they wake again, no notification will fire.
+    wake(&app, SCREENS, |_| {});
     std::thread::Builder::new()
         .name("agenthud-windows".into())
         .spawn(move || run(&app))

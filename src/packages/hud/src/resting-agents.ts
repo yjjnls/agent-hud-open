@@ -23,12 +23,12 @@ export function sourceID(snapshot: Snapshot, source: string): string {
 const queueRecency = 86_400_000;
 
 /** The agents a resting HUD in `mode` shows without a list, one per mark, in
- * Open's order (ScreenAgents.available):
+ * Open's order (ScreenAgents.available), except that every mode also shows
+ * agents with a session heard from in the last day whose live status is on
+ * (a provider can carry sessions without any quota or balance reading):
  * - notch, the glow's parts: each window whose reading shows a level, then
  *   each balance (ReportView.glowSegments);
- * - Dynamic dock: every window's agent in row order, then any agent with a
- *   session heard from in the last day whose live status is on, newest first
- *   (ReportView.queueVendors);
+ * - Dynamic dock: every window's agent in row order (ReportView.queueVendors);
  * - Simple: every window's agent in row order, then the agents billed by
  *   balance alone (SimpleMeterItem.items).
  * Each mode also includes detected, enabled clients without a reading.
@@ -40,30 +40,30 @@ export function restingAgents(snapshot: Snapshot, mode: HUDMode, now: number) {
       order.push(source);
   };
   let expiresAt = Infinity;
+  const live = (source: string) =>
+    snapshot.sourcePreferences?.[sourceID(snapshot, source)]?.live !== false;
+  const recentSessions = snapshot.sessions
+    .map((s) => ({ source: s.source, at: Date.parse(s.updatedAt) }))
+    .filter(({ source, at }) => {
+      const expires = at + queueRecency;
+      if (!Number.isFinite(expires) || now > expires || !live(source))
+        return false;
+      expiresAt = Math.min(expiresAt, expires);
+      return true;
+    })
+    .sort((a, b) => b.at - a.at);
   if (mode === "notch") {
     snapshot.quotas
       .filter((q) => q.usedPercent != null && q.status !== "stale")
       .forEach((q) => add(q.vendor));
     snapshot.billing.forEach((b) => add(b.vendor));
+    recentSessions.forEach(({ source }) => add(source));
   } else {
     snapshot.quotas.forEach((q) => add(q.vendor));
     if (mode === "simple") {
       snapshot.billing.forEach((b) => add(b.vendor));
     } else {
-      const live = (source: string) =>
-        snapshot.sourcePreferences?.[sourceID(snapshot, source)]?.live !==
-        false;
-      snapshot.sessions
-        .map((s) => ({ source: s.source, at: Date.parse(s.updatedAt) }))
-        .filter(({ source, at }) => {
-          const expires = at + queueRecency;
-          if (!Number.isFinite(expires) || now > expires || !live(source))
-            return false;
-          expiresAt = Math.min(expiresAt, expires);
-          return true;
-        })
-        .sort((a, b) => b.at - a.at)
-        .forEach(({ source }) => add(source));
+      recentSessions.forEach(({ source }) => add(source));
     }
   }
   snapshot.providers
