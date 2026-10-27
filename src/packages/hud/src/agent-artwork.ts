@@ -26,6 +26,7 @@ export const ORIGINAL_ARTWORK_FILES = {
 type OriginalVendor = keyof typeof ORIGINAL_ARTWORK_FILES;
 const vendors: Readonly<Record<string, OriginalVendor>> = {
   claude: "Claude",
+  "claude-remote": "Claude",
   openai: "ChatGPT",
   antigravity: "Antigravity",
   deepseek: "DeepSeek",
@@ -62,6 +63,7 @@ const normalize = (source: string) =>
     .replace(/[\s_]+/g, "-");
 const aliases: Readonly<Record<string, string>> = {
   "claude-code": "claude",
+  "claude-remote": "claude",
   anthropic: "claude",
   chatgpt: "openai",
   codex: "openai",

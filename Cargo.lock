@@ -57,6 +57,7 @@ dependencies = [
 name = "agent-hud-host"
 version = "0.1.0"
 dependencies = [
+ "agent-hud-agents",
  "agent-hud-hud",
  "agent-hud-runtime",
  "base64 0.22.1",

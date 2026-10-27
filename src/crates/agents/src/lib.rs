@@ -10,6 +10,7 @@ pub mod account;
 mod agent;
 mod change;
 pub mod channel;
+pub mod clauderemote;
 pub mod discovery;
 pub mod endpoints;
 pub mod hooks;

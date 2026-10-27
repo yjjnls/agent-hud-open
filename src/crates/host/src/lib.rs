@@ -20,6 +20,7 @@ pub mod extension;
 mod hud;
 mod instance;
 mod mcp_clients;
+mod remote;
 mod picture;
 mod screens;
 mod shell;
@@ -229,6 +230,18 @@ impl Service {
                 request_wake.1.notify_one();
             }
         }));
+        // The remote session poller writes hook events into the shared inbox
+        // and wakes the collector through the same data bit.
+        let remote_wake = Arc::clone(&wake);
+        let remote_data = hooks
+            .lock()
+            .map_err(|_| "Hook service unavailable")?
+            .data_dir()
+            .to_path_buf();
+        remote::spawn(
+            remote_data,
+            Arc::new(move || wake_collector(&remote_wake, DATA)),
+        );
         let backend = Arc::new(Mutex::new(Backend {
             runtime,
             snapshot: None,

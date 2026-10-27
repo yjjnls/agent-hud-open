@@ -258,3 +258,123 @@ impl Observers {
         events
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wake() -> super::super::Wake {
+        std::sync::Arc::new(|| {})
+    }
+
+    /// The watcher's report of a rewrite travels on its own thread; the
+    /// drain picks it up once it has landed.
+    fn drain_until(observers: &mut Observers, want: usize) -> Vec<HookEvent> {
+        let mut events = observers.drain();
+        for _ in 0..60 {
+            if events.len() >= want {
+                return events;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            events = observers.drain();
+        }
+        events
+    }
+
+    #[test]
+    fn the_remote_pollers_client_stays_registered() {
+        let home = tempfile::tempdir().unwrap();
+        let env = std::collections::HashMap::new();
+        for c in clients(home.path(), &env) {
+            eprintln!("client: {} root: {:?}", c.source, c.root.display());
+        }
+        assert!(clients(home.path(), &env)
+            .iter()
+            .any(|c| c.source == "claude-remote"));
+    }
+
+    /// The remote poller's records: written beside Claude Code's own files,
+    /// read back as turn events carrying the user's own names. (Their
+    /// synthesis into HUD sessions is covered in core.)
+    #[test]
+    fn claude_remote_records_read_back_with_their_names() {
+        let home = tempfile::tempdir().unwrap();
+        let mut environment = std::collections::HashMap::new();
+        environment.insert("HOME".into(), home.path().to_str().unwrap().into());
+        let root = home.path().join(".claude/agent-hud/turns");
+        std::fs::create_dir_all(&root).unwrap();
+        let now = super::super::now_ms();
+        let record = serde_json::json!({
+            "version": 1,
+            "sessionID": "claude-remote:39dc2da1-f269-4b44-8761-624fbf5ea091",
+            "turnID": format!("39dc2da1-{}", now % 100_000),
+            "startedAtMs": now - 60_000,
+            "observedAtMs": now,
+            "state": "running",
+            "title": "重构登录模块",
+            "workspace": "/home/yjj/code/api",
+        });
+        std::fs::write(root.join("39dc2da1.json"), record.to_string()).unwrap();
+        let mut observers = Observers::new(home.path(), &environment, wake());
+        let events = drain_until(&mut observers, 1);
+        assert_eq!(events.len(), 1, "the record reads back as one event");
+        assert_eq!(events[0].source, "claude-remote");
+        assert_eq!(events[0].data["title"], "重构登录模块");
+        assert_eq!(events[0].data["state"], "running");
+
+        // The same bytes again are not a second event; a moved timestamp is.
+        assert!(observers.drain().is_empty(), "unchanged bytes read again");
+        std::fs::write(
+            root.join("39dc2da1.json"),
+            serde_json::json!({
+                "version": 1,
+                "sessionID": "claude-remote:39dc2da1-f269-4b44-8761-624fbf5ea091",
+                "turnID": format!("39dc2da1-{}", now % 100_000),
+                "startedAtMs": now - 60_000,
+                "observedAtMs": now + 30_000,
+                "state": "running",
+                "title": "重构登录模块",
+                "workspace": "/home/yjj/code/api",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let renewed = drain_until(&mut observers, 1);
+        assert_eq!(renewed.len(), 1, "a renewed heartbeat reads again");
+        assert_eq!(renewed[0].data["observedAtMs"], now + 30_000);
+    }
+
+    /// A record file that vanishes reads as a session-forget, so the HUD
+    /// drops the row when the remote process exits.
+    #[test]
+    fn a_removed_remote_record_forgets_its_session() {
+        let home = tempfile::tempdir().unwrap();
+        let mut environment = std::collections::HashMap::new();
+        environment.insert("HOME".into(), home.path().to_str().unwrap().into());
+        let root = home.path().join(".claude/agent-hud/turns");
+        std::fs::create_dir_all(&root).unwrap();
+        let now = super::super::now_ms();
+        std::fs::write(
+            root.join("9c24e9af.json"),
+            serde_json::json!({
+                "version": 1,
+                "sessionID": "claude-remote:9c24e9af-cad0-4731-93b6-aaec2071e0f1",
+                "turnID": "9c24e9af-wait",
+                "startedAtMs": now - 30_000,
+                "observedAtMs": now,
+                "state": "completed",
+                "title": "修数据面板",
+                "workspace": "/home/yjj/code/web",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut observers = Observers::new(home.path(), &environment, wake());
+        assert_eq!(drain_until(&mut observers, 1).len(), 1);
+        std::fs::remove_file(root.join("9c24e9af.json")).unwrap();
+        let events = drain_until(&mut observers, 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "session-forget");
+        assert_eq!(events[0].data["turnId"], "9c24e9af-wait");
+    }
+}

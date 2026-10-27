@@ -1,8 +1,8 @@
 //! The descriptor every client has, and the registry of them all.
 use crate::hooks::{Hooks, Observer};
 use crate::{
-    antigravity, buddy, claude, codex, copilot, cursor, deepseek, devin, glm, grok, hermes, kimi,
-    openclaw, opencode, pi, qoder, qwen, zcode,
+    antigravity, buddy, claude, clauderemote, codex, copilot, cursor, deepseek, devin, glm, grok,
+    hermes, kimi, openclaw, opencode, pi, qoder, qwen, zcode,
 };
 use crate::{Channel, Discovery, PerOs, Replies, Source};
 
@@ -43,6 +43,7 @@ pub struct Agent {
 /// Every client, in the order Settings and the statistics list them.
 pub static ALL: &[&Agent] = &[
     &claude::AGENT,
+    &clauderemote::AGENT,
     &codex::AGENT,
     &deepseek::AGENT,
     &antigravity::AGENT,
@@ -82,6 +83,7 @@ mod tests {
             ids,
             [
                 "claude",
+                "claude-remote",
                 "codex",
                 "deepseek",
                 "antigravity",

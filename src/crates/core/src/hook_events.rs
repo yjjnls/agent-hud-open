@@ -625,4 +625,97 @@ mod tests {
         assert_eq!(rows[0]["liveFacts"]["outcome"], "completed");
         assert_eq!(rows[0]["liveFacts"]["endedAt"], iso(at));
     }
+
+    /// The remote poller reports another machine's sessions with the user's
+    /// own names; its rows must survive ingest and surface as HUD sessions.
+    #[test]
+    fn claude_remote_observation_surfaces_the_renamed_session() {
+        let at = 1_792_470_000_000i64;
+        let mut evidence = HookEvidence::default();
+        let event = HookEvent {
+            source: "claude-remote".into(),
+            session_id: "claude-remote:39dc2da1-f269-4b44-8761-624fbf5ea091".into(),
+            kind: "session-observation".into(),
+            at_ms: at,
+            data: json!({
+                "turnId": "39dc2da1-1793096000",
+                "state": "running",
+                "startedAtMs": at - 60_000,
+                "observedAtMs": at,
+                "title": "重构登录模块",
+                "workspace": "/home/yjj/code/api",
+                "outcome": null,
+            }),
+        };
+        evidence.ingest(&[event], at);
+        let rows = evidence.extra_sessions(at + 1, 1, &HashSet::new());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["source"], "claude-remote");
+        assert_eq!(rows[0]["title"], "重构登录模块");
+        assert_eq!(rows[0]["state"], "running");
+    }
+
+    /// A permission question or input wait holds the turn open as waiting.
+    #[test]
+    fn claude_remote_attention_marks_the_turn_waiting() {
+        let at = 1_792_470_000_000i64;
+        let mut evidence = HookEvidence::default();
+        evidence.ingest(
+            &[HookEvent {
+                source: "claude-remote".into(),
+                session_id: "claude-remote:9c24e9af-cad0-4731-93b6-aaec2071e0f1".into(),
+                kind: "session-observation".into(),
+                at_ms: at,
+                data: json!({
+                    "turnId": "9c24e9af-1793096000",
+                    "state": "running",
+                    "startedAtMs": at - 60_000,
+                    "observedAtMs": at,
+                    "title": "修数据面板",
+                    "workspace": "/home/yjj/code/web",
+                    "outcome": null,
+                }),
+            }],
+            at,
+        );
+        evidence.ingest(
+            &[HookEvent {
+                source: "claude-remote".into(),
+                session_id: "claude-remote:9c24e9af-cad0-4731-93b6-aaec2071e0f1".into(),
+                kind: "attention".into(),
+                at_ms: at + 5_000,
+                data: json!({"message": "Claude is waiting for your input"}),
+            }],
+            at + 5_000,
+        );
+        let rows = evidence.extra_sessions(at + 5_000, 1, &HashSet::new());
+        assert_eq!(rows[0]["state"], "waiting");
+        assert_eq!(rows[0]["title"], "修数据面板");
+    }
+
+    /// A session gone from the remote table reads as ended, then idles out.
+    #[test]
+    fn claude_remote_ended_turn_sets_the_outcome() {
+        let at = 1_792_470_000_000i64;
+        let mut evidence = HookEvidence::default();
+        evidence.ingest(
+            &[HookEvent {
+                source: "claude-remote".into(),
+                session_id: "claude-remote:39dc2da1-f269-4b44-8761-624fbf5ea091".into(),
+                kind: "session-observation".into(),
+                at_ms: at,
+                data: json!({
+                    "turnId": "39dc2da1-ended",
+                    "state": "ended",
+                    "startedAtMs": at,
+                    "observedAtMs": at,
+                    "outcome": "interrupted",
+                }),
+            }],
+            at,
+        );
+        let rows = evidence.extra_sessions(at + 1, 1, &HashSet::new());
+        assert_eq!(rows[0]["state"], "idle");
+        assert_eq!(rows[0]["liveFacts"]["outcome"], "interrupted");
+    }
 }
