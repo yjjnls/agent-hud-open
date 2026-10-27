@@ -490,7 +490,8 @@ impl crate::AgentHudCore {
                     .find(|found| found.id == id)
                     .cloned()
                     .unwrap_or_default();
-                let has_sessions = projection.observed_providers.contains(id);
+                let has_sessions = projection.observed_providers.contains(id)
+                    || self.hook_events.observes(id);
                 if has_sessions {
                     discovery.usage = true;
                     if !discovery

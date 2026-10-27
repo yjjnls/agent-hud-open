@@ -402,6 +402,14 @@ impl AgentHudCore {
     }
 
     pub fn ingest_hook_events(&mut self, events: Vec<agent_hud_agents::HookEvent>) {
+        if std::env::var_os("AGENTHUD_DEBUG_OBSERVERS").is_some() {
+            let sample: Vec<String> = events
+                .iter()
+                .take(4)
+                .map(|e| format!("{}|{}|{}", e.kind, e.data["state"], e.at_ms))
+                .collect();
+            eprintln!("[core] ingest events={} sample={sample:?}", events.len());
+        }
         // Where each session's calls go, kept for the reads of its log.
         if let Some(db) = &self.database {
             for event in events

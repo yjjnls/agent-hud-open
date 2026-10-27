@@ -61,6 +61,14 @@ impl Backend {
         // Every pass retains its current generatedAt. Move, do not deep-clone,
         // the new projection into the one application cache, even on quiet passes.
         self.snapshot = Some(Arc::new(value));
+        // A diagnosis valve: AGENTHUD_DEBUG_SNAPSHOT names a file every newly
+        // built snapshot is also written to, so a headless check can read what
+        // the webview would see without asking it.
+        if let Ok(path) = std::env::var("AGENTHUD_DEBUG_SNAPSHOT") {
+            if let Some(snapshot) = &self.snapshot {
+                let _ = std::fs::write(&path, snapshot.to_string());
+            }
+        }
         if changed || recovered {
             self.publish_snapshot(app);
             if let (Some(extension), Some(snapshot)) = (&self.extension, &self.snapshot) {
@@ -620,6 +628,14 @@ async fn cached_snapshot(service: tauri::State<'_, Service>) -> Result<CachedSna
         let backend = backend
             .lock()
             .map_err(|_| "Runtime lock is unavailable".to_owned())?;
+        // A diagnosis valve: AGENTHUD_DEBUG_SNAPSHOT names a file the last
+        // snapshot is also written to, so a headless check can read what the
+        // webview would see.
+        if let Ok(path) = std::env::var("AGENTHUD_DEBUG_SNAPSHOT") {
+            if let Some(snapshot) = &backend.snapshot {
+                let _ = std::fs::write(&path, snapshot.to_string());
+            }
+        }
         Ok(CachedSnapshot {
             snapshot: backend.snapshot.clone(),
             error: backend.error.clone(),

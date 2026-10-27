@@ -166,6 +166,12 @@ impl Observers {
         if changed.as_ref().is_some_and(HashSet::is_empty) {
             return Vec::new();
         }
+        if std::env::var_os("AGENTHUD_DEBUG_OBSERVERS").is_some() {
+            eprintln!(
+                "[observers] drain changed={:?}",
+                changed.as_ref().map(|set| set.len())
+            );
+        }
         let mut paths = HashSet::new();
         for client in &self.clients {
             let canonical_root = client.root.canonicalize().ok();
@@ -200,6 +206,7 @@ impl Observers {
         }
         let now = super::now_ms();
         let mut events = Vec::new();
+        let read = paths.len();
         for path in paths {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
@@ -255,6 +262,22 @@ impl Observers {
             }
         }
         events.sort_by_key(|e| e.at_ms);
+        if std::env::var_os("AGENTHUD_DEBUG_OBSERVERS").is_some() {
+            let sample: Vec<String> = events
+                .iter()
+                .take(4)
+                .map(|e| {
+                    format!(
+                        "{}|{}|{}|{}",
+                        e.data["state"],
+                        e.at_ms,
+                        &e.session_id[e.session_id.len().saturating_sub(8)..],
+                        e.data["title"].as_str().unwrap_or("")
+                    )
+                })
+                .collect();
+            eprintln!("[observers] drain read={read} events={} sample={sample:?}", events.len());
+        }
         events
     }
 }

@@ -240,6 +240,11 @@ impl HookEvidence {
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
+    /// Whether this source has any hook or observer record: a client the
+    /// logs never name but whose events arrive still counts as in use.
+    pub(crate) fn observes(&self, source: &str) -> bool {
+        self.sessions.contains_key(source)
+    }
     /// What a session's hooks and Agent HUD's deliveries say about where its
     /// prompts were typed: the latest of each, and the first each recorded.
     pub(crate) fn reports(&self, source: &str, session: &str) -> surfaces::Reports {
@@ -526,6 +531,17 @@ impl HookEvidence {
                 let at = iso(event.at_ms);
                 let mut session = json!({"id":event.session_id,"source":event.source,"title":label,"model":event.data["model"].as_str().unwrap_or("Unknown"),"cwd":cwd,"updatedAt":at,"lastMessageAt":at,"state":"idle","tokens":0,"cost":null,"contextPercent":null,"logPath":null,"parentId":null,"usageStatus":"unavailable","evidence":"completion-hook","liveFacts":{"turnId":event.data["turnId"],"turnStartedAt":null,"outcome":"completed","endedAt":at,"limitedUntil":null,"observedAt":at,"lastEventAt":at,"activity":null,"requests":[]}});
                 self.overlay(&mut session, now, Some(event.at_ms), None);
+                if std::env::var_os("AGENTHUD_DEBUG_OBSERVERS").is_some()
+                    && event.source == "claude-remote"
+                    && session["state"] != "idle"
+                {
+                    eprintln!(
+                        "[extra@{}] non-idle row {} {}",
+                        chrono::Utc::now().format("%H:%M:%S"),
+                        event.data["title"].as_str().unwrap_or(""),
+                        session["state"]
+                    );
+                }
                 // No log names its prompts: the reports do, else the client's
                 // one interface.
                 let mut origins =
