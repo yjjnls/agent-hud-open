@@ -11,8 +11,13 @@ use objc2_foundation::{NSNotification, NSNotificationCenter};
 use std::{ptr::NonNull, sync::Mutex, time::Duration};
 use tauri::Manager;
 
-/// AppKit tells every change; nothing is measured on a timer.
-pub const POLL: Option<Duration> = None;
+/// AppKit tells most changes, but a sleep/wake round-trip often changes
+/// nothing it reports: the displays come back with the same geometry and
+/// no ScreenParameters notification ever fires, while the sleeping empty
+/// catalog has already torn the windows down — so without a re-measure
+/// the HUD stays gone forever. A slow poll re-measures regardless; the
+/// planner's signature check makes a no-change pass a no-op.
+pub const POLL: Option<Duration> = Some(Duration::from_secs(30));
 
 struct Observer {
     center: Retained<NSNotificationCenter>,
