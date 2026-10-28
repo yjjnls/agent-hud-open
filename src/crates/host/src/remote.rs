@@ -105,42 +105,22 @@ fn run(host: String, requests: Requests) {
             }
             let now = now_ms();
             let mut seen: HashMap<String, Row> = HashMap::new();
-            for row in table {
-                let Some(sid) = text(&row, "sessionId").filter(|s| s.len() >= 8) else {
+            // The background-jobs table is the roster: every job's state.json
+            // (the user's own name for the session, its last words, its fork
+            // parent) persists after the process exits, so the HUD list
+            // matches claude's own resume list exactly. A bare interactive
+            // session the jobs never knew gets no row — it is not part of
+            // that list.
+            for job in &jobs {
+                let Some(sid) = text(job, "sessionId").filter(|s| s.len() >= 8) else {
                     continue;
                 };
-                seen.insert(
-                    sid,
-                    Row {
-                        status: text(&row, "status").unwrap_or_else(|| "idle".into()),
-                        name: text(&row, "name").unwrap_or_default(),
-                        stamp: iso_stamp(&row, "statusUpdatedAt")
-                            .max(iso_stamp(&row, "updatedAt")),
-                        started: row["startedAt"].as_i64().unwrap_or(0).clamp(1, now),
-                        cwd: text(&row, "cwd").unwrap_or_default(),
-                        message: String::new(),
-                        parent: String::new(),
-                    },
-                );
-            }
-            // The background-jobs table fills in every session the live table
-            // no longer names — a finished job's process is gone, but its
-            // state.json (the user's own name for it, its last words, its
-            // waiting state) persists. A session the table does name wins:
-            // its status is live truth.
-            for job in jobs {
-                let Some(sid) = text(&job, "sessionId").filter(|s| s.len() >= 8) else {
-                    continue;
-                };
-                if seen.contains_key(&sid) {
-                    continue;
-                }
-                let state = text(&job, "state").unwrap_or_default();
+                let state = text(job, "state").unwrap_or_default();
                 let message = text(&job, "detail")
                     .or_else(|| job["output"]["result"].as_str().map(str::to_owned))
                     .unwrap_or_default();
                 seen.insert(
-                    sid.clone(),
+                    sid,
                     Row {
                         status: if state == "working" { "busy" } else { "idle" }.into(),
                         name: text(&job, "name").unwrap_or_default(),
@@ -151,23 +131,87 @@ fn run(host: String, requests: Requests) {
                         parent: text(&job, "forkParentSessionId").unwrap_or_default(),
                     },
                 );
-                // A blocked job waits on its user: raise the standing wait
-                // card, the same one a permission question used to raise.
-                // The retain below drops the wait when the job's stamp moves
-                // (it resumed) or the job leaves the table; or_insert keeps
-                // re-raising each round free while the wait stands.
-                if state == "blocked" {
-                    if let Some(row) = seen.get(&sid) {
-                        waits.entry(sid).or_insert_with(|| Wait {
-                            stamp: row.stamp,
-                            title: row.name.clone(),
-                            message: row.message.clone(),
-                        });
-                    }
+            }
+            // The live table overlays real-time truth on the roster: a job
+            // still running in a terminal carries its busy/idle/shell phase,
+            // a fresher rename, its real cwd. A job no process holds anymore
+            // just keeps its persisted row.
+            for row in table {
+                let Some(sid) = text(&row, "sessionId").filter(|s| s.len() >= 8) else {
+                    continue;
+                };
+                let Some(existing) = seen.get_mut(&sid) else {
+                    continue;
+                };
+                if let Some(name) = text(&row, "name").filter(|n| !n.is_empty()) {
+                    existing.name = name;
+                }
+                if let Some(status) = text(&row, "status") {
+                    existing.status = status;
+                }
+                let live_stamp =
+                    iso_stamp(&row, "statusUpdatedAt").max(iso_stamp(&row, "updatedAt"));
+                if live_stamp > 0 {
+                    existing.stamp = live_stamp;
+                }
+                if let Some(started) = row["startedAt"].as_i64() {
+                    existing.started = started.clamp(1, now);
+                }
+                if let Some(cwd) = text(&row, "cwd").filter(|c| !c.is_empty()) {
+                    existing.cwd = cwd;
+                }
+            }
+            // A blocked job waits on its user: raise the standing wait card,
+            // the same one a permission question used to raise. Read after
+            // the overlay, so the wait's stamp is the stamp the retain below
+            // will compare against. The retain drops the wait when the
+            // session's stamp moves (it resumed) or the row leaves; or_insert
+            // keeps re-raising each round free while the wait stands.
+            for job in &jobs {
+                if text(job, "state").as_deref() != Some("blocked") {
+                    continue;
+                }
+                let Some(sid) = text(job, "sessionId").filter(|s| s.len() >= 8) else {
+                    continue;
+                };
+                if let Some(row) = seen.get(&sid) {
+                    waits.entry(sid).or_insert_with(|| Wait {
+                        stamp: row.stamp,
+                        title: row.name.clone(),
+                        message: row.message.clone(),
+                    });
                 }
             }
             // A session gone from the table loses its record file, which the
             // observers read as a session-forget and the HUD drops the row.
+            // A launch also sweeps the records of a previous life: files the
+            // roster no longer names — it has no memory of them, so the
+            // per-round diff below would never touch them. Only this
+            // poller's own records (claude-remote) are swept; a local
+            // session's file is another writer's.
+            if live.is_empty() {
+                if let Ok(entries) = std::fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        let Some(stem) = name.to_str().and_then(|name| {
+                            name.strip_suffix(".json")
+                                .filter(|stem| stem.len() == 8)
+                        }) else {
+                            continue;
+                        };
+                        let remote_owned = std::fs::read_to_string(entry.path())
+                            .ok()
+                            .and_then(|bytes| serde_json::from_str::<Value>(&bytes).ok())
+                            .and_then(|record| text(&record, "sessionID"))
+                            .is_some_and(|id| id.starts_with(&format!("{SOURCE}:")));
+                        if remote_owned
+                            && !seen.keys().any(|sid| sid.starts_with(stem))
+                        {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
             for sid in live.keys() {
                 if !seen.contains_key(sid) {
                     let _ = std::fs::remove_file(root.join(format!("{}.json", &sid[..8])));

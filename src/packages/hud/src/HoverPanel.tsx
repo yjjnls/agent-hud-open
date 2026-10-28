@@ -638,7 +638,6 @@ function RemoteSessionsBoard({
         </strong>
         <span
           style={{
-            marginLeft: "auto",
             fontSize: 10,
             fontWeight: 600,
             fontVariantNumeric: "tabular-nums",
@@ -658,6 +657,16 @@ function RemoteSessionsBoard({
         const waiting = isWaiting(session);
         const running = !waiting && session.state === "running";
         const message = session.liveFacts?.message?.trim() ?? "";
+        // A finished row gone quiet for over half an hour steps back —
+        // the active few stand out of the long tail.
+        const now = Date.parse(snapshot.generatedAt);
+        const at = Date.parse(session.lastMessageAt ?? session.updatedAt);
+        const stale =
+          !waiting &&
+          !running &&
+          Number.isFinite(now) &&
+          Number.isFinite(at) &&
+          now - at > 30 * 60_000;
         return (
           <div
             key={session.id}
@@ -667,6 +676,7 @@ function RemoteSessionsBoard({
               gap: 8,
               fontSize: 12,
               lineHeight: "16px",
+              opacity: stale ? 0.45 : 1,
             }}
           >
             <span
@@ -685,6 +695,7 @@ function RemoteSessionsBoard({
               }}
             />
             <span
+              title={session.title || session.id}
               style={{
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -699,6 +710,7 @@ function RemoteSessionsBoard({
               {session.title || session.id}
             </span>
             <span
+              title={message}
               style={{
                 overflow: "hidden",
                 textOverflow: "ellipsis",
