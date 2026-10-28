@@ -205,11 +205,17 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
       i++;
     } else blockLines.push([block]);
   }
+  // The listed sections show, in that order; anything unlisted stays out of
+  // the panel — an empty list is a blank panel, not the default one.
+  const wanted = config.panelSections ?? defaultHUDConfig.panelSections;
   const sections = inPanelOrder<{ key: string; content: ReactNode }>(
     [
       {
         key: "blocks",
-        content: config.quotaDetails && blocks.length > 0 && (
+        content:
+          wanted.includes("blocks") &&
+          config.quotaDetails &&
+          blocks.length > 0 && (
           <div
             className="hud-source-blocks"
             style={{
@@ -251,20 +257,23 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
       },
       {
         key: "tokens",
-        content: config.tokenUsage && (
-          <SourceTokenChart
-            snapshot={snapshot}
-            focusVendor={focusVendor}
-            light={light}
-            Logo={Logo}
-            layout={config.panelLayout.tokens}
-            active={active}
-          />
-        ),
+        content: wanted.includes("tokens") &&
+          config.tokenUsage && (
+            <SourceTokenChart
+              snapshot={snapshot}
+              focusVendor={focusVendor}
+              light={light}
+              Logo={Logo}
+              layout={config.panelLayout.tokens}
+              active={active}
+            />
+          ),
       },
       {
         key: "sessions",
-        content: config.sessionList && (
+        content:
+          wanted.includes("sessions") &&
+          config.sessionList && (
           <SourceSessions
             snapshot={snapshot}
             focusVendor={focusVendor}
@@ -277,7 +286,7 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
         ),
       },
     ],
-    config.panelSections ?? defaultHUDConfig.panelSections,
+    wanted,
   );
   const panel = (
     <div
