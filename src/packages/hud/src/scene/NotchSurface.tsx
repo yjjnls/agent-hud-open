@@ -33,7 +33,9 @@ export function Silhouette({
   flare: number;
   radius: number;
   fill: string;
-  outline: string;
+  /** A hairline around the shape; a shape that sits on the black menu-bar
+   * ground reads cleaner with none — the shadow carries the separation. */
+  outline?: string;
   initialShape?: {
     width: number;
     height: number;

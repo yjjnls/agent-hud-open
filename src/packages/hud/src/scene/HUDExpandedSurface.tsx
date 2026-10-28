@@ -244,7 +244,14 @@ export function HUDExpandedSurface({
                 (detached || config.mode === "simple") && !simplePeek
                   ? `1px solid ${outline}`
                   : "none",
-              boxShadow: config.mode === "notch" ? undefined : shadow,
+              // A dock-grown card needs no shadow: it is the island's own black
+              // shape reaching down, as the native notch's is — a dark halo
+              // only reads as a translucent border on a dark ground. Floating
+              // cards keep theirs.
+              boxShadow:
+                config.mode === "notch" || (!detached && config.mode === "logos")
+                  ? undefined
+                  : shadow,
             }}
           >
             {config.mode === "notch" && (
@@ -282,7 +289,6 @@ export function HUDExpandedSurface({
                 flare={surfaceFlare}
                 radius={open ? 26 : 14}
                 fill={fill}
-                outline={outline}
                 duration={reduceMotion || dragging ? 0 : HUD_METRICS.duration}
                 initialShape={{
                   width: from.width,

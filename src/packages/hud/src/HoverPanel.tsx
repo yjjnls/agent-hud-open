@@ -932,7 +932,7 @@ function RemoteSessionsBoard({
                   fontSize: 12.5,
                   fontWeight: 650,
                   letterSpacing: "0.02em",
-                  color: colors.text,
+                  color: colors.warningText,
                 }}
               >
                 <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
