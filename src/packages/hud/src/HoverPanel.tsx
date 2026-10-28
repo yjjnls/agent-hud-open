@@ -607,7 +607,28 @@ function RemoteSessionsBoard({
       ),
     [remote, answered],
   );
-  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  // A fold survives the panel closing and the app restarting: the webview's
+  // localStorage keeps it, so the board reopens the way it was left.
+  const [folded, setFolded] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("agent-hud.remote-groups.folded") ?? "{}",
+      );
+    } catch {
+      return {};
+    }
+  });
+  const fold = (key: string, foldedNow: boolean) =>
+    setFolded((f) => {
+      const next = { ...f, [key]: foldedNow };
+      try {
+        localStorage.setItem(
+          "agent-hud.remote-groups.folded",
+          JSON.stringify(next),
+        );
+      } catch {}
+      return next;
+    });
   const zh = snapshotLanguage(snapshot) === "zh";
   if (remote.length === 0) return null;
   const isWaiting = (session: Session) =>
@@ -776,9 +797,7 @@ function RemoteSessionsBoard({
             >
               <button
                 type="button"
-                onClick={() =>
-                  setFolded((f) => ({ ...f, [group.key]: open }))
-                }
+                onClick={() => fold(group.key, open)}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -788,10 +807,10 @@ function RemoteSessionsBoard({
                   background: "transparent",
                   cursor: "pointer",
                   textAlign: "left",
-                  fontSize: 10.5,
-                  fontWeight: 600,
+                  fontSize: 12.5,
+                  fontWeight: 650,
                   letterSpacing: "0.02em",
-                  color: colors.secondary,
+                  color: colors.text,
                 }}
               >
                 <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
