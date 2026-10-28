@@ -629,6 +629,11 @@ function RemoteSessionsBoard({
       } catch {}
       return next;
     });
+  // An open detail card is browsing, not a preference: it lives with the
+  // panel and closes with it.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleRow = (id: string) =>
+    setExpanded((e) => ({ ...e, [id]: !e[id] }));
   const zh = snapshotLanguage(snapshot) === "zh";
   if (remote.length === 0) return null;
   const isWaiting = (session: Session) =>
@@ -653,6 +658,35 @@ function RemoteSessionsBoard({
     return age(Math.max(0, (now - at) / 1000), zh ? "zh" : "en")
       .replace(" ago", "")
       .replace(" 前", "");
+  };
+  // An absolute stamp for the detail card: today reads as a clock time, and
+  // anything older keeps its date.
+  const when = (iso: string | null | undefined) => {
+    if (!iso) return "";
+    const at = Date.parse(iso);
+    if (!Number.isFinite(at)) return "";
+    const atDate = new Date(at);
+    const clock = `${String(atDate.getHours()).padStart(2, "0")}:${String(atDate.getMinutes()).padStart(2, "0")}`;
+    const now = Date.parse(snapshot.generatedAt) || Date.now();
+    const midnight = new Date(now);
+    midnight.setHours(0, 0, 0, 0);
+    if (at >= midnight.getTime())
+      return clock;
+    if (at >= midnight.getTime() - 86_400_000)
+      return zh ? `昨天 ${clock}` : `yesterday ${clock}`;
+    return `${atDate.getMonth() + 1}/${atDate.getDate()} ${clock}`;
+  };
+  // How long a turn ran, or has been running.
+  const span = (fromIso: string | null, toIso: string | null, live: boolean) => {
+    const from = fromIso ? Date.parse(fromIso) : NaN;
+    const to = live ? Date.parse(snapshot.generatedAt) : toIso ? Date.parse(toIso) : NaN;
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return "";
+    const seconds = Math.max(0, Math.round((to - from) / 1000));
+    if (seconds < 90) return `${seconds}s`;
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 90) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    return hours >= 36 ? `${Math.round(hours / 24)}d` : `${hours}h ${minutes % 60}m`;
   };
   return (
     <div
@@ -704,73 +738,161 @@ function RemoteSessionsBoard({
             Number.isFinite(now) &&
             Number.isFinite(at) &&
             now - at > 30 * 60_000;
+          const open = Boolean(expanded[session.id]);
+          const facts = session.liveFacts ?? null;
+          // The fork parent sits in this same list; its id there carries the
+          // source prefix this row's parentId drops.
+          const parentTitle = session.parentId
+            ? (remote.find((item) => item.id.endsWith(session.parentId!))
+                ?.title ?? null)
+            : null;
           return (
-            <div
-              key={session.id}
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                gap: 8,
-                fontSize: 12,
-                lineHeight: "16px",
-                opacity: stale ? 0.45 : 1,
-              }}
-            >
-              <span
-                aria-hidden
+            <div key={session.id} style={{ display: "grid" }}>
+              <div
+                onClick={() => toggleRow(session.id)}
                 style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 999,
-                  flex: "0 0 auto",
-                  alignSelf: "center",
-                  background: waiting
-                    ? colors.warning
-                    : running
-                      ? colors.ok
-                      : colors.tertiary,
-                }}
-              />
-              <span
-                title={session.title || session.id}
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                  maxWidth: 180,
-                  color: waiting ? colors.warningText : colors.text,
-                  fontWeight: waiting ? 600 : 400,
+                  display: "flex",
+                  alignItems: "baseline",
+                  gap: 8,
+                  fontSize: 12,
+                  lineHeight: "16px",
+                  opacity: stale ? 0.45 : 1,
+                  cursor: "pointer",
                 }}
               >
-                {session.parentId ? "⑂ " : ""}
-                {session.title || session.id}
-              </span>
-              <span
-                title={message}
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  flex: 1,
-                  minWidth: 32,
-                  fontSize: 11,
-                  color: colors.secondary,
-                }}
-              >
-                {message}
-              </span>
-              <span
-                style={{
-                  flexShrink: 0,
-                  fontSize: 11,
-                  fontVariantNumeric: "tabular-nums",
-                  whiteSpace: "nowrap",
-                  color: colors.tertiary,
-                }}
-              >
-                {ago(session)}
-              </span>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 999,
+                    flex: "0 0 auto",
+                    alignSelf: "center",
+                    background: waiting
+                      ? colors.warning
+                      : running
+                        ? colors.ok
+                        : colors.tertiary,
+                  }}
+                />
+                <span
+                  title={session.title || session.id}
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                    maxWidth: 180,
+                    color: waiting ? colors.warningText : colors.text,
+                    fontWeight: waiting ? 600 : 400,
+                  }}
+                >
+                  {session.parentId ? "⑂ " : ""}
+                  {session.title || session.id}
+                </span>
+                <span
+                  title={message}
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    flex: 1,
+                    minWidth: 32,
+                    fontSize: 11,
+                    color: colors.secondary,
+                  }}
+                >
+                  {message}
+                </span>
+                <span
+                  style={{
+                    flexShrink: 0,
+                    fontSize: 11,
+                    fontVariantNumeric: "tabular-nums",
+                    whiteSpace: "nowrap",
+                    color: colors.tertiary,
+                  }}
+                >
+                  {ago(session)}
+                </span>
+              </div>
+              {open && (
+                <div
+                  style={{
+                    margin: "3px 0 4px 20px",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    background: "rgba(128, 128, 128, 0.08)",
+                    display: "grid",
+                    gap: 5,
+                    fontSize: 11,
+                    lineHeight: "15px",
+                    color: colors.secondary,
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 10, alignItems: "baseline" }}>
+                    <span
+                      style={{
+                        fontWeight: 650,
+                        color: waiting
+                          ? colors.warningText
+                          : running
+                            ? colors.okText
+                            : colors.secondary,
+                      }}
+                    >
+                      {waiting
+                        ? zh
+                          ? "等待输入"
+                          : "waiting"
+                        : running
+                          ? zh
+                            ? "运行中"
+                            : "running"
+                          : facts?.outcome === "failed"
+                            ? zh
+                              ? "失败"
+                              : "failed"
+                            : facts?.outcome === "interrupted"
+                              ? zh
+                                ? "已中断"
+                                : "interrupted"
+                              : zh
+                                ? "已完成"
+                                : "done"}
+                    </span>
+                    {facts?.turnStartedAt && (
+                      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {zh ? "本轮" : "turn"} {when(facts.turnStartedAt)}
+                        {facts.turnStartedAt &&
+                          ` · ${span(facts.turnStartedAt, facts.endedAt, running)}`}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {zh ? "最后活动" : "last activity"}{" "}
+                    {when(session.lastMessageAt ?? session.updatedAt)}
+                    {session.cwd ? ` · ${session.cwd}` : ""}
+                  </div>
+                  {parentTitle && (
+                    <div>
+                      ⑂ {zh ? "源自" : "forked from"} {parentTitle}
+                    </div>
+                  )}
+                  {message && (
+                    <div
+                      style={{
+                        whiteSpace: "pre-wrap",
+                        color: colors.text,
+                        fontSize: 12,
+                        lineHeight: "17px",
+                      }}
+                    >
+                      {message}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         };
