@@ -239,15 +239,16 @@ impl Service {
             }
         }));
         // The remote session poller writes hook events into the shared inbox
-        // and wakes the collector through the same data bit.
+        // and wakes the collector through the same data bit; it also opens
+        // the island's waiting cards for a remote permission or input wait.
         let remote_wake = Arc::clone(&wake);
-        let remote_data = hooks
-            .lock()
-            .map_err(|_| "Hook service unavailable")?
-            .data_dir()
-            .to_path_buf();
+        let (remote_data, remote_requests) = {
+            let hooks = hooks.lock().map_err(|_| "Hook service unavailable")?;
+            (hooks.data_dir().to_path_buf(), hooks.requests())
+        };
         remote::spawn(
             remote_data,
+            remote_requests,
             Arc::new(move || wake_collector(&remote_wake, DATA)),
         );
         let backend = Arc::new(Mutex::new(Backend {

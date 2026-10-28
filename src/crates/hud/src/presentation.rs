@@ -34,6 +34,9 @@ struct Saved {
     shared_layout: Value,
     layouts: Map<String, Value>,
     sources: Map<String, Value>,
+    /// The menu bar's Hide notch glow switch, remembered across launches
+    /// (Open's `UsageStore.glowHidden`).
+    glow_hidden: bool,
 }
 impl Default for Saved {
     fn default() -> Self {
@@ -45,6 +48,7 @@ impl Default for Saved {
             shared_layout: json!({}),
             layouts: Map::new(),
             sources: Map::new(),
+            glow_hidden: false,
         }
     }
 }
@@ -59,9 +63,6 @@ struct State {
     app: Option<Value>,
     holds: HashMap<String, i64>,
     screens: Vec<Value>,
-    /// The menu bar's Hide notch glow, for every screen until the app quits
-    /// (Open's `UsageStore.glowHidden`).
-    glow_hidden: bool,
 }
 pub struct Presentation {
     path: PathBuf,
@@ -139,7 +140,6 @@ impl Presentation {
                 app: None,
                 holds: HashMap::new(),
                 screens: vec![],
-                glow_hidden: false,
             }),
         })
     }
@@ -272,7 +272,7 @@ impl Presentation {
                 }
             }
         }
-        json!({"revision":s.revision,"initialized":s.initialized,"glowHidden":s.glow_hidden,"store":{"version":3,"global":s.saved.global,"screens":screens,"screenDefaults":s.saved.screen_defaults},"sharedLayout":shared,"layouts":layouts,"sources":s.saved.sources,"appDraft":s.app,"drafts":{"layouts":s.layouts.keys().collect::<Vec<_>>(),"styles":s.styles.keys().collect::<Vec<_>>(),"app":s.app.is_some()},"holds":s.holds,"screens":s.screens})
+        json!({"revision":s.revision,"initialized":s.initialized,"glowHidden":s.saved.glow_hidden,"store":{"version":3,"global":s.saved.global,"screens":screens,"screenDefaults":s.saved.screen_defaults},"sharedLayout":shared,"layouts":layouts,"sources":s.saved.sources,"appDraft":s.app,"drafts":{"layouts":s.layouts.keys().collect::<Vec<_>>(),"styles":s.styles.keys().collect::<Vec<_>>(),"app":s.app.is_some()},"holds":s.holds,"screens":s.screens})
     }
     /// Apply display preferences once at the host boundary, before any window or product relay sees data.
     pub fn project_snapshot(&self, snapshot: &mut Value) {
@@ -340,11 +340,17 @@ impl Presentation {
             Err(error) => eprintln!("Live status defaults could not be saved: {error}"),
         }
     }
-    /// Shows or hides the notch glow.
+    /// Shows or hides the notch glow; the choice is saved, so it outlives a
+    /// relaunch.
     pub fn toggle_glow(&self) -> Value {
         let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        s.glow_hidden = !s.glow_hidden;
-        s.revision = s.revision.wrapping_add(1);
+        let checkpoint = s.clone();
+        let before = s.saved.clone();
+        s.saved.glow_hidden = !s.saved.glow_hidden;
+        if let Err(error) = self.persist(&mut s, before) {
+            *s = checkpoint;
+            eprintln!("Live status defaults could not be saved: {error}");
+        }
         Self::view_of(&mut s)
     }
     pub fn manual_app_edit(&self, key: &str) -> Option<Value> {
@@ -602,5 +608,14 @@ mod live_status_tests {
         let mut sample = json!({"mode": "demo", "providers": [{"id": "codex", "detected": false}], "sessions": []});
         demo.project_snapshot(&mut sample);
         assert!(sample["sourcePreferences"].get("codex").is_none());
+    }
+
+    #[test]
+    fn a_hidden_glow_stays_hidden_across_a_restart() {
+        let folder = tempfile::tempdir().unwrap();
+        let owner = Presentation::new(folder.path().to_path_buf()).unwrap();
+        assert_eq!(owner.toggle_glow()["glowHidden"], true);
+        let reopened = Presentation::new(folder.path().to_path_buf()).unwrap();
+        assert_eq!(reopened.toggle_glow()["glowHidden"], false);
     }
 }

@@ -157,7 +157,10 @@ export function useIslandNews(
   const dismiss = () => setQueue(dismissIslandCard);
   useEffect(() => {
     if (!current || held || current.type === "request") return;
-    const timer = setTimeout(dismiss, 4000);
+    // A completion names a finished turn the user wants to catch before it
+    // turns; quota notices repeat, so they may move along quickly.
+    const seconds = current.event?.kind === "completion" ? 12 : 4;
+    const timer = setTimeout(dismiss, seconds * 1000);
     return () => clearTimeout(timer);
   }, [current?.id, held]);
   const select = (id: string) =>

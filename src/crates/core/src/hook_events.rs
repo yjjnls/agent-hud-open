@@ -447,8 +447,16 @@ impl HookEvidence {
                     .map(iso)
                     .unwrap_or(Value::Null);
                 facts["outcome"] = observed.data["outcome"].clone();
+                // An observation that saw the turn end names that moment;
+                // one that only finds the session already idle can only say
+                // when it looked.
                 facts["endedAt"] = if state == "idle" {
-                    iso(observed.at_ms)
+                    observed
+                        .data
+                        .get("endedAtMs")
+                        .and_then(Value::as_i64)
+                        .map(iso)
+                        .unwrap_or_else(|| iso(observed.at_ms))
                 } else {
                     Value::Null
                 };

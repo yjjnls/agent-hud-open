@@ -9,6 +9,7 @@
 
 use agent_hud_agents::HookEvent;
 use agent_hud_runtime::hooks::record_event;
+use agent_hud_runtime::requests::Requests;
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -35,12 +36,14 @@ const SOURCE: &str = "claude-remote";
 
 /// Starts the poller. `wake` runs the collector's data waker, so a fresh
 /// record is picked up within the same pass; the observer files also wake
-/// it through their own watcher.
-pub fn spawn(data_dir: PathBuf, wake: Wake) {
+/// it through their own watcher. `requests` holds the island's waiting
+/// cards this poller opens for a remote permission question or an input
+/// wait, and closes when the session works again.
+pub fn spawn(data_dir: PathBuf, requests: Requests, wake: Wake) {
     let host = std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.into());
     let started = std::thread::Builder::new()
         .name("agenthud-remote".into())
-        .spawn(move || run(host, data_dir, wake));
+        .spawn(move || run(host, data_dir, requests, wake));
     if started.is_err() {
         l10n_warn("远程会话线程无法启动", "The remote session worker could not start");
     }
@@ -56,7 +59,7 @@ struct Row {
     cwd: String,
 }
 
-fn run(host: String, data_dir: PathBuf, wake: Wake) {
+fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
     // The observer root the agent's descriptor names, beside Claude Code's
     // own files; each session gets one record file, rewritten in place as
     // its turn moves.
@@ -72,9 +75,11 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
     let mut offset: u64 = 0;
     // The table as last seen: session id → row.
     let mut live: HashMap<String, Row> = HashMap::new();
-    // Sessions waiting on an input or a permission: their record reads
-    // waiting until the user answers, however long that takes.
-    let mut waiting: HashSet<String> = HashSet::new();
+    // Sessions waiting on an input or a permission: the remote session id →
+    // the table stamp at the moment the wait began. A wait outlives the
+    // table's idle/busy flicker — only a new turn (a different stamp) or a
+    // gone session says the user answered, however long the wait takes.
+    let mut waits: HashMap<String, i64> = HashMap::new();
     // A failed read is quiet — the remote may be asleep — but its first
     // appearance is worth one line, as is its clearing.
     let mut failing = false;
@@ -116,21 +121,32 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
             }
             // Turn snapshots: every live session is reported each round, so
             // the HUD's own two-minute quiet rule never ends a working one.
+            // The turn id rides the table's status timestamp, which freezes
+            // at the moment a session changed phase: stable while a phase
+            // lasts, so re-reports never re-open the same turn, and fresh
+            // each time a wait ends or a turn completes, so each completion
+            // raises its own island card.
             for (sid, row) in &seen {
-                let state = match (row.status.as_str(), waiting.contains(sid)) {
+                let state = match (row.status.as_str(), waits.contains_key(sid)) {
                     ("busy", _) => "running",
                     (_, true) => "waitingForApproval",
                     _ => "completed",
                 };
-                let turn = if state == "running" {
-                    format!("{}-{}", &sid[..8], row.stamp)
-                } else {
-                    format!("{}-wait", &sid[..8])
-                };
+                let turn = format!("{}-{}", &sid[..8], row.stamp);
                 report(
                     &root,
                     sid,
-                    record(sid, turn, state, None, &row.name, &row.cwd, row.started, now),
+                    record(
+                        sid,
+                        turn,
+                        state,
+                        None,
+                        &row.name,
+                        &row.cwd,
+                        row.started,
+                        now,
+                        row.stamp,
+                    ),
                 );
             }
             live = seen.clone();
@@ -148,8 +164,9 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
                 match text(&line, "event").as_deref() {
                     Some("PermissionRequest") | Some("Notification") => {
                         // The balloon over the Clawd rides the hook inbox;
-                        // the waiting state rides the observer record.
-                        waiting.insert(plain.clone());
+                        // the waiting state rides the observer record; the
+                        // island's waiting card rides the requests owner.
+                        waits.insert(plain.clone(), row.stamp);
                         let message = text(&line, "msg").unwrap_or_else(|| {
                             if text(&line, "event").as_deref() == Some("PermissionRequest") {
                                 "等待权限审批".into()
@@ -157,6 +174,11 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
                                 "等待输入".into()
                             }
                         });
+                        requests.register_native(
+                            wait_id(&plain),
+                            wait_card(&plain, &row.name, &message, now),
+                            now,
+                        );
                         if record_event(
                             &data_dir,
                             &attention_event(&plain, message, now),
@@ -171,12 +193,13 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
                                 &plain,
                                 record(
                                     &plain,
-                                    format!("{}-wait", &sid[..8]),
+                                    format!("{}-{}", &sid[..8], row.stamp),
                                     "waitingForApproval",
                                     None,
                                     &row.name,
                                     &row.cwd,
                                     row.started,
+                                    now,
                                     now,
                                 ),
                             );
@@ -185,28 +208,47 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
                     Some("Stop") if row.status != "busy" => {
                         // The turn is done; the next table read confirms it,
                         // this makes it immediate.
-                        waiting.remove(&plain);
+                        waits.remove(&plain);
+                        requests.cancel(&wait_id(&plain));
                         report(
                             &root,
                             &plain,
                             record(
                                 &plain,
-                                format!("{}-wait", &sid[..8]),
+                                format!("{}-{}", &sid[..8], row.stamp),
                                 "completed",
                                 None,
                                 &row.name,
                                 &row.cwd,
                                 row.started,
                                 now,
+                                row.stamp,
                             ),
                         );
                     }
                     _ => {}
                 }
             }
-            // A wait survives only while the session idles unanswered; busy
-            // turns keep their own heartbeat, gone sessions end.
-            waiting.retain(|sid| seen.get(sid).is_some_and(|row| row.status == "idle"));
+            // A wait survives the table's idle/busy flicker: only a new turn
+            // on the same session (a stamp that moved past the one the wait
+            // began at) or a session gone from the table says the user
+            // answered. A waiting card rides its wait, so it closes with it.
+            waits.retain(|sid, began| match seen.get(sid) {
+                None => {
+                    requests.cancel(&wait_id(sid));
+                    false
+                }
+                Some(row) if row.status == "busy" && row.stamp != *began => {
+                    requests.cancel(&wait_id(sid));
+                    false
+                }
+                Some(_) => true,
+            });
+            let waiting_full: Vec<String> = waits
+                .keys()
+                .map(|sid| format!("{SOURCE}:{sid}"))
+                .collect();
+            requests.set_native_waiting(SOURCE, &waiting_full, now);
             offset = size;
         } else if !failing {
             failing = true;
@@ -237,6 +279,10 @@ fn report(root: &Path, sid: &str, record: Value) -> bool {
 }
 
 /// The observer record the platform's parser expects: version 1, one turn.
+/// A completed turn names its outcome and its real end (the table's status
+/// timestamp, which freezes when the session finished) — what the island's
+/// completion tracker needs to raise one fresh card, now, instead of one
+/// stale card per long-finished session on the next launch.
 fn record(
     sid: &str,
     turn: String,
@@ -246,6 +292,7 @@ fn record(
     cwd: &str,
     started: i64,
     now: i64,
+    ended: i64,
 ) -> Value {
     let mut value = json!({
         "version": 1,
@@ -257,6 +304,10 @@ fn record(
         "title": title,
         "workspace": cwd,
     });
+    if state == "completed" {
+        value["outcome"] = json!("completed");
+        value["endedAtMs"] = json!(ended.max(1));
+    }
     if let Some(stop) = stop {
         value["stopReason"] = json!(stop);
     }
@@ -272,6 +323,56 @@ fn attention_event(sid: &str, message: String, now: i64) -> HookEvent {
         kind: "attention".into(),
         data: json!({"message": message}),
     }
+}
+
+/// A waiting card's stable id: one per remote session, so repeated
+/// permission or notification events never stack cards.
+fn wait_id(sid: &str) -> String {
+    format!("{SOURCE}-wait:{sid}")
+}
+
+/// The card an unanswered remote wait shows: the session's own name (the
+/// question's header tag, since a card without buttons renders no title),
+/// the wait's message, and where the answer belongs. There are no answer
+/// buttons — the remote terminal is the only place to answer in.
+fn wait_card(sid: &str, title: &str, message: &str, now: i64) -> Value {
+    let created = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+    let name = if title.is_empty() {
+        l10n("Claude（远程）", "Claude (remote)")
+    } else {
+        title.to_string()
+    };
+    json!({
+        "title": name,
+        "source": SOURCE,
+        "vendor": l10n("远程 Claude", "Remote Claude"),
+        "toolName": "claude",
+        "input": message,
+        "summary": message,
+        "sessionId": format!("{SOURCE}:{sid}"),
+        "createdAt": created,
+        "allowsAlways": false,
+        "kind": "question",
+        "answersQuestion": false,
+        "answerNote": l10n(
+            "远程会话：请在远程机器的终端里处理",
+            "Remote session: handle it in the remote machine's terminal",
+        ),
+        "questions": [{
+            "answerKey": "remote",
+            "header": name,
+            "question": message,
+            "options": [],
+            "multiSelect": false,
+        }],
+    })
+}
+
+/// The user interface's language, as the rest of the host picks it.
+fn l10n(zh: &str, en: &str) -> String {
+    agent_hud_runtime::l10n::text(zh, en).into()
 }
 
 /// One combined SSH read: the session table, then the log's size and any
@@ -335,4 +436,53 @@ fn now_ms() -> i64 {
 
 fn l10n_warn(zh: &str, en: &str) {
     eprintln!("agent-hud remote: {}", agent_hud_runtime::l10n::text(zh, en));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_completed_turn_names_its_outcome_and_a_live_one_does_not() {
+        let done = record(
+            "8c03067d-1234",
+            "8c03067d-1793086819869".into(),
+            "completed",
+            None,
+            "sandbox1-gpu",
+            "/srv",
+            1,
+            1000,
+            990,
+        );
+        assert_eq!(done["outcome"], "completed");
+        assert_eq!(done["endedAtMs"], 990);
+        let live = record(
+            "8c03067d-1234",
+            "8c03067d-1793086819870".into(),
+            "running",
+            None,
+            "sandbox1-gpu",
+            "/srv",
+            1,
+            1000,
+            1000,
+        );
+        assert!(live["outcome"].is_null());
+        assert!(live["endedAtMs"].is_null());
+    }
+
+    #[test]
+    fn a_waiting_card_points_at_the_remote_terminal_and_cannot_be_answered_here() {
+        let card = wait_card("8c03067d-1234", "sandbox1-gpu", "等待权限审批", 1000);
+        assert_eq!(card["sessionId"], "claude-remote:8c03067d-1234");
+        assert_eq!(card["kind"], "question");
+        assert_eq!(card["answersQuestion"], false);
+        // The session's own name rides the question's header tag: a card
+        // without answer buttons renders no title of its own.
+        let question = &card["questions"][0];
+        assert_eq!(question["header"], "sandbox1-gpu");
+        assert_eq!(question["question"], "等待权限审批");
+        assert!(!card["answerNote"].as_str().unwrap().is_empty());
+    }
 }

@@ -28,6 +28,8 @@ pub(super) struct Tracker {
 fn date(value: &Value) -> Option<i64> {
     value.as_str().and_then(metering::date_ms)
 }
+/// How recent a completion must be to still count as news.
+const FRESH_COMPLETION: i64 = 2 * 60_000;
 fn iso(at: i64) -> Value {
     DateTime::<Utc>::from_timestamp_millis(at)
         .map(|d| json!(d.to_rfc3339()))
@@ -80,7 +82,15 @@ impl Tracker {
             .collect::<Vec<_>>();
         completions.sort_by_key(|(at, key, _)| (*at, key.clone()));
         for (at, key, session) in completions {
-            if at <= self.started || at > now || self.seen.insert(key.clone(), at).is_some() {
+            // Only a fresh completion is news. A turn that ended minutes ago
+            // had its moment before anyone watched — reraising it would flood
+            // the island after a relaunch, when a watcher first rereports
+            // everything it sees.
+            if at <= self.started
+                || at > now
+                || at < now - FRESH_COMPLETION
+                || self.seen.insert(key.clone(), at).is_some()
+            {
                 continue;
             }
             self.push(&key,json!({"kind":"completion","at":iso(at),"startedAt":session["liveFacts"]["turnStartedAt"],"source":session["source"],"sessionId":session["id"],"turnId":session["liveFacts"]["turnId"],"title":session["title"],"model":session["model"],"message":session["liveFacts"]["message"],"navigationTarget":session["navigationTarget"],"cwd":session["cwd"],"logPath":session["logPath"]}));
