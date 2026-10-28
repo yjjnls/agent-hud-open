@@ -62,8 +62,10 @@ const time = (date: string | null | undefined): number | null => {
   const value = Date.parse(date) / 1000;
   return Number.isFinite(value) ? value : null;
 };
-const inflight = (session: Facts) =>
-  session.phase === "running" || session.phase === "waiting";
+// The bot animates only real motion: a session blocked on its user rests like
+// an idle one — the open-source clawd shows the still logo until work runs —
+// and a request, when one exists, still claims the attention looks above.
+const inflight = (session: Facts) => session.phase === "running";
 const started = (session: Facts) => time(session.live?.turnStartedAt);
 const ended = (session: Facts) => time(session.live?.endedAt);
 const toolSeen = (session: Facts) => time(session.live?.activity?.toolAt);

@@ -166,10 +166,11 @@ export function vendorsFromSnapshot(
       used: tightest?.usedPercent ?? null,
       // An agent billed by balance alone takes its balance's level.
       level: tightest?.status ?? balance?.level ?? "stale",
-      // In flight, as Open counts working: running or waiting on a request.
-      working: sessions.filter(
-        (s) => s.state === "running" || s.state === "waiting",
-      ).length,
+      // Working is motion, not blockage: a running session drives the bot and
+      // the glow, while one waiting on its user rests like an idle one — the
+      // open-source clawd shows the still logo until work actually runs. Its
+      // dot, and the attention look when a request exists, still mark it.
+      working: sessions.filter((s) => s.state === "running").length,
       waiting: snapshot.approvals.filter((a) => vendorKey(a.source) === key)
         .length,
       balance: balance
