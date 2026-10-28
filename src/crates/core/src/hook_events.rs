@@ -461,11 +461,14 @@ impl HookEvidence {
                     Value::Null
                 };
                 // An observer sees only the session's phase, never which tool
-                // runs, so a live one reports the working look rather than no
-                // animation at all; each fresh observation refreshes toolAt,
-                // which lookOf needs within its freshness window to hold that
-                // look. Never overwrite a richer reading.
-                if facts["activity"].is_null() && state != "idle" {
+                // runs, so a live working one reports the working look rather
+                // than no animation at all; each fresh observation refreshes
+                // toolAt, which lookOf needs within its freshness window to
+                // hold that look. A waiting session animates like it works —
+                // wrong: it sits still, and the island would say "running"
+                // about a session that is really blocked on its user. Never
+                // overwrite a richer reading.
+                if facts["activity"].is_null() && state == "running" {
                     facts["activity"] = json!({"work":"command","openCall":null,"toolAt":iso(observed.at_ms),"delegating":false,"awaitsModel":false,"retrying":false,"compactingSince":null});
                 }
                 // The turn's last words, when the observer carries them (the
@@ -683,6 +686,18 @@ mod tests {
         evidence.ingest(&[done], at + 1000);
         let rows = evidence.extra_sessions(at + 1000, 1, &HashSet::new());
         assert_eq!(rows[0]["state"], "idle");
+        assert!(rows[0]["liveFacts"]["activity"].is_null());
+    }
+
+    /// A session blocked on its user is not working; the bot must sit still
+    /// rather than promise motion that will not come.
+    #[test]
+    fn a_waiting_observation_does_not_animate_the_bot() {
+        let at = 1_792_470_000_000i64;
+        let mut evidence = HookEvidence::default();
+        evidence.ingest(&[observation("waiting", at)], at);
+        let rows = evidence.extra_sessions(at, 1, &HashSet::new());
+        assert_eq!(rows[0]["state"], "waiting");
         assert!(rows[0]["liveFacts"]["activity"].is_null());
     }
 
