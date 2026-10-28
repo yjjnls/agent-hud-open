@@ -781,6 +781,7 @@ export function HUDScene({
                         focusVendor={focusedVendor?.name}
                         light={light}
                         Logo={HUDLogo}
+                        onDecide={onRequestDecision}
                         onConfigure={
                           onConfigure
                             ? () => {

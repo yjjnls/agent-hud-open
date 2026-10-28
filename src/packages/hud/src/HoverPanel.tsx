@@ -13,7 +13,7 @@ import {
   Settings,
 } from "lucide-react";
 import { motion, MotionConfig } from "motion/react";
-import type { Quota, Snapshot } from "@agent-hud/protocol";
+import type { Quota, RequestDecision, Snapshot } from "@agent-hud/protocol";
 import { Button } from "@agent-hud/ui/components/button";
 import {
   defaultHUDConfig,
@@ -39,6 +39,7 @@ import {
 import { SourceTokenChart } from "./panel/TokenChartSection";
 import { SourceIndexing } from "./panel/IndexingSection";
 import { clientDisplayName } from "./IslandNews";
+import { ApprovalContent } from "./permissions/ApprovalContent";
 import { snapshotLanguage } from "@agent-hud/ui/format";
 
 export { SOURCE_PANEL } from "./panel/theme";
@@ -55,6 +56,9 @@ export interface SourceHoverPanelProps {
    * Statistics that opens the update in Settings. */
   update?: HUDUpdateNotice | null;
   onUpdate?: () => void;
+  /** Answers a pending request from the panel: the same channel the island
+   * card uses, so a wait or a finished-turn notice can be dismissed here. */
+  onDecide?: (id: string, decision: RequestDecision) => void | Promise<void>;
   maxHeight?: number;
   active?: boolean;
   inlineAlert?: ReactNode;
@@ -71,6 +75,7 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
   onStats,
   update,
   onUpdate,
+  onDecide,
   maxHeight,
   active = true,
   inlineAlert,
@@ -346,7 +351,12 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
             colors={colors}
             config={config}
           />
-          <PendingRequestsBoard snapshot={snapshot} light={light} colors={colors} />
+          <PendingRequestsBoard
+            snapshot={snapshot}
+            light={light}
+            colors={colors}
+            onDecide={onDecide}
+          />
           {snapshot.indexing?.kind && (
             <div
               data-hud-section="indexing"
@@ -696,19 +706,24 @@ function RemoteSessionsBoard({
 }
 
 /** The island's pending answers, listed: every request that waits, local or
- * remote, with the source it came from. The island card is where an answer
- * goes; this board is where they are all visible at once. */
+ * remote, with the source it came from. A row opens its full card inline —
+ * the same content the island card shows — where it can be answered. */
 function PendingRequestsBoard({
   snapshot,
   light,
   colors,
+  onDecide,
 }: {
   snapshot: Snapshot;
   light: boolean;
   colors: ReturnType<typeof palette>;
+  onDecide?: (id: string, decision: RequestDecision) => void | Promise<void>;
 }) {
   const pending = snapshot.approvals;
   const zh = snapshotLanguage(snapshot) === "zh";
+  const [openId, setOpenId] = useState<string | null>(null);
+  // A card that was answered elsewhere leaves the list; close the pane then.
+  const opened = pending.find((request) => request.id === openId);
   if (pending.length === 0) return null;
   return (
     <div
@@ -746,49 +761,71 @@ function PendingRequestsBoard({
           question?.header?.trim() ||
           question?.question?.trim() ||
           clientDisplayName(request.source);
+        const open = request.id === openId;
         return (
-          <div
-            key={request.id}
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 8,
-              fontSize: 12,
-              lineHeight: "16px",
-            }}
-          >
-            <span
-              aria-hidden
+          <div key={request.id} style={{ display: "grid", gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => setOpenId(open ? null : request.id)}
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: 999,
-                flex: "0 0 auto",
-                alignSelf: "center",
-                background: colors.warning,
-              }}
-            />
-            <span
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                color: colors.warningText,
-                fontWeight: 600,
+                display: "flex",
+                alignItems: "baseline",
+                gap: 8,
+                width: "100%",
+                fontSize: 12,
+                lineHeight: "16px",
+                padding: 0,
+                border: 0,
+                background: "transparent",
+                cursor: "pointer",
+                textAlign: "left",
+                font: "inherit",
+                color: "inherit",
               }}
             >
-              {label}
-            </span>
-            <span
-              style={{
-                marginLeft: "auto",
-                fontSize: 11,
-                whiteSpace: "nowrap",
-                color: colors.secondary,
-              }}
-            >
-              {clientDisplayName(request.source)}
-            </span>
+              <span
+                aria-hidden
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  flex: "0 0 auto",
+                  alignSelf: "center",
+                  background: colors.warning,
+                }}
+              />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  color: colors.warningText,
+                  fontWeight: 600,
+                }}
+              >
+                {label}
+              </span>
+              <span
+                style={{
+                  marginLeft: "auto",
+                  fontSize: 11,
+                  whiteSpace: "nowrap",
+                  color: open ? colors.text : colors.secondary,
+                }}
+              >
+                {clientDisplayName(request.source)}
+              </span>
+            </button>
+            {open && opened && (
+              <ApprovalContent
+                requests={pending}
+                selected={opened}
+                select={(id) => setOpenId(id)}
+                decide={onDecide}
+                light={light}
+                language={snapshotLanguage(snapshot)}
+              />
+            )}
           </div>
         );
       })}
