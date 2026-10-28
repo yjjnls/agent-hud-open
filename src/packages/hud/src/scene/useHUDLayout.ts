@@ -128,8 +128,13 @@ export function useHUDLayout({
     focusedVendor?.key,
   ]);
 
+  // The open island grows from its dock: a focused agent's card stays
+  // attached and flared like a hover-open, instead of floating off as a
+  // rounded card. Only a standalone alert — news with no dock context — and
+  // the Simple line's own focus flow keep floating.
   const detached =
-    config.mode !== "notch" && Boolean(focusedVendor || standaloneAlert);
+    config.mode !== "notch" &&
+    Boolean(standaloneAlert || (config.mode === "simple" && focusedVendor));
   const peek = Boolean(
     open && detached && !pinned && !standaloneAlert && focusedVendor,
   );
