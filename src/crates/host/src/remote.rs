@@ -1,25 +1,21 @@
 //! Remote Claude Code sessions over SSH: another machine's live session
 //! table (`~/.claude/sessions/*.json`, each live process writes one line)
-//! and its notify log (`~/.config/claude-notify/events.log`), polled on a
-//! quiet thread. Turn snapshots land as observer records beside Claude
-//! Code's own files — the same channel a client's session-observer plugin
-//! writes — because the hook inbox only carries hook facts. A session row
-//! carries the user's own name for the session and a `status`
-//! (busy/idle/shell), so the HUD shows remote work without a transcript.
+//! plus its background-job table (`~/.claude/jobs/*/state.json`, every
+//! job's own record — the full history the live table loses when a job's
+//! process exits), polled on a quiet thread. Turn snapshots land as
+//! observer records beside Claude Code's own files — the same channel a
+//! client's session-observer plugin writes — so the HUD shows the remote
+//! list as claude itself names it: the user's own rename for each
+//! session, who waits, who runs, who is done.
 
-use agent_hud_agents::HookEvent;
-use agent_hud_runtime::hooks::record_event;
 use agent_hud_runtime::requests::Requests;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
-    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// Fresh enough that a session's observation re-report always lands inside
 /// lookOf's 10 s toolAt freshness window, so a live remote session holds the
@@ -28,8 +24,6 @@ const POLL: Duration = Duration::from_secs(8);
 /// The SSH host, as named in the ssh config; the environment wins.
 const HOST_ENV: &str = "AGENTHUD_REMOTE_HOST";
 const DEFAULT_HOST: &str = "yjj-dev";
-/// Where the remote notify log lives, under the remote home.
-const EVENTS_LOG: &str = ".config/claude-notify/events.log";
 /// One session-table read is capped, so a runaway remote cannot stall us.
 const SESSIONS_LIMIT: usize = 8 << 20;
 const SOURCE: &str = "claude-remote";
@@ -38,16 +32,15 @@ const SOURCE: &str = "claude-remote";
 /// only replay history on every launch.
 const FRESH_COMPLETION: i64 = 2 * 60_000;
 
-/// Starts the poller. `wake` runs the collector's data waker, so a fresh
-/// record is picked up within the same pass; the observer files also wake
-/// it through their own watcher. `requests` holds the island's waiting
-/// cards this poller opens for a remote permission question or an input
-/// wait, and closes when the session works again.
-pub fn spawn(data_dir: PathBuf, requests: Requests, wake: Wake) {
+/// Starts the poller. `requests` holds the island's waiting cards this
+/// poller opens for a remote input wait, and closes when the session
+/// works again. Observer records wake the collector through their own
+/// file watcher.
+pub fn spawn(requests: Requests) {
     let host = std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.into());
     let started = std::thread::Builder::new()
         .name("agenthud-remote".into())
-        .spawn(move || run(host, data_dir, requests, wake));
+        .spawn(move || run(host, requests));
     if started.is_err() {
         l10n_warn("远程会话线程无法启动", "The remote session worker could not start");
     }
@@ -61,6 +54,11 @@ struct Row {
     stamp: i64,
     started: i64,
     cwd: String,
+    /// The turn's last words (a job's `detail`), shown beside the session.
+    message: String,
+    /// The parent session of a branched job (the ⑂ mark in claude's
+    /// list); empty when the session is its own root.
+    parent: String,
 }
 
 /// A session's unanswered wait: the table stamp the wait began at, plus the
@@ -71,7 +69,7 @@ struct Wait {
     message: String,
 }
 
-fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
+fn run(host: String, requests: Requests) {
     // The observer root the agent's descriptor names, beside Claude Code's
     // own files; each session gets one record file, rewritten in place as
     // its turn moves.
@@ -82,9 +80,6 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
             PathBuf::from(home).join(".claude/agent-hud/turns")
         }
     };
-    // The log's byte offset: 0 reads only its current size, so the first
-    // pass never replays history.
-    let mut offset: u64 = 0;
     // The table as last seen: session id → row.
     let mut live: HashMap<String, Row> = HashMap::new();
     // Sessions waiting on an input or a permission: the remote session id →
@@ -100,7 +95,7 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
     // appearance is worth one line, as is its clearing.
     let mut failing = false;
     loop {
-        if let Some((table, log, size)) = poll(&host, offset) {
+        if let Some((table, jobs)) = poll(&host) {
             if failing {
                 l10n_warn(
                     &format!("远程 {host} 恢复读取"),
@@ -119,14 +114,57 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                     Row {
                         status: text(&row, "status").unwrap_or_else(|| "idle".into()),
                         name: text(&row, "name").unwrap_or_default(),
-                        stamp: row["statusUpdatedAt"]
-                            .as_i64()
-                            .or_else(|| row["updatedAt"].as_i64())
-                            .unwrap_or(0),
+                        stamp: iso_stamp(&row, "statusUpdatedAt")
+                            .max(iso_stamp(&row, "updatedAt")),
                         started: row["startedAt"].as_i64().unwrap_or(0).clamp(1, now),
                         cwd: text(&row, "cwd").unwrap_or_default(),
+                        message: String::new(),
+                        parent: String::new(),
                     },
                 );
+            }
+            // The background-jobs table fills in every session the live table
+            // no longer names — a finished job's process is gone, but its
+            // state.json (the user's own name for it, its last words, its
+            // waiting state) persists. A session the table does name wins:
+            // its status is live truth.
+            for job in jobs {
+                let Some(sid) = text(&job, "sessionId").filter(|s| s.len() >= 8) else {
+                    continue;
+                };
+                if seen.contains_key(&sid) {
+                    continue;
+                }
+                let state = text(&job, "state").unwrap_or_default();
+                let message = text(&job, "detail")
+                    .or_else(|| job["output"]["result"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                seen.insert(
+                    sid.clone(),
+                    Row {
+                        status: if state == "working" { "busy" } else { "idle" }.into(),
+                        name: text(&job, "name").unwrap_or_default(),
+                        stamp: iso_stamp(&job, "updatedAt"),
+                        started: iso_stamp(&job, "createdAt").clamp(1, now),
+                        cwd: text(&job, "originCwd").unwrap_or_else(|| cwd_of_scan(&job)),
+                        message,
+                        parent: text(&job, "forkParentSessionId").unwrap_or_default(),
+                    },
+                );
+                // A blocked job waits on its user: raise the standing wait
+                // card, the same one a permission question used to raise.
+                // The retain below drops the wait when the job's stamp moves
+                // (it resumed) or the job leaves the table; or_insert keeps
+                // re-raising each round free while the wait stands.
+                if state == "blocked" {
+                    if let Some(row) = seen.get(&sid) {
+                        waits.entry(sid).or_insert_with(|| Wait {
+                            stamp: row.stamp,
+                            title: row.name.clone(),
+                            message: row.message.clone(),
+                        });
+                    }
+                }
             }
             // A session gone from the table loses its record file, which the
             // observers read as a session-forget and the HUD drops the row.
@@ -135,10 +173,9 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                     let _ = std::fs::remove_file(root.join(format!("{}.json", &sid[..8])));
                 }
             }
-            // A turn finished without its Stop event reaching us (the log
-            // line can race the table): the table itself tells it — busy
-            // last pass, done now, no wait standing. Only a fresh finish
-            // raises a card, so a launch never replays finished history.
+            // A turn finished: the table itself tells it — busy last pass,
+            // done now, no wait standing. Only a fresh finish raises a
+            // card, so a launch never replays finished history.
             for (sid, row) in &seen {
                 if row.status == "busy" || waits.contains_key(sid) {
                     continue;
@@ -180,118 +217,17 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                         sid,
                         turn,
                         state,
-                        None,
                         &row.name,
                         &row.cwd,
                         row.started,
                         now,
                         row.stamp,
+                        &row.message,
+                        &row.parent,
                     ),
                 );
             }
             live = seen.clone();
-            for line in log {
-                let Some(sid) = text(&line, "sid").filter(|s| s.len() >= 8) else {
-                    continue;
-                };
-                let Some((plain, row)) = seen
-                    .iter()
-                    .find(|(uuid, _)| uuid.starts_with(&sid))
-                    .map(|(k, v)| (k.clone(), v))
-                else {
-                    continue; // An event for a session the table no longer names.
-                };
-                match text(&line, "event").as_deref() {
-                    // Only a permission is a question aimed at this user.
-                    // Permission requests travel as their own event, but the
-                    // Notification hook carries them too ("Claude needs your
-                    // permission"). The other Notification — "Claude is
-                    // waiting for your input" — also fires on unattended
-                    // loops idling between runs, so it asks for no answer.
-                    Some("PermissionRequest")
-                    | Some("Notification")
-                        if text(&line, "msg")
-                            .map(|m| m.to_lowercase().contains("permission"))
-                            .unwrap_or(true) =>
-                    {
-                        // The balloon over the Clawd rides the hook inbox;
-                        // the waiting state rides the observer record; the
-                        // island's waiting card rides the requests owner.
-                        let message = text(&line, "msg").unwrap_or_else(|| "等待权限审批".into());
-                        waits.insert(
-                            plain.clone(),
-                            Wait {
-                                stamp: row.stamp,
-                                title: row.name.clone(),
-                                message: message.clone(),
-                            },
-                        );
-                        requests.register_native(
-                            wait_id(&plain),
-                            wait_card(&plain, &row.name, &message, now),
-                            now,
-                        );
-                        if record_event(
-                            &data_dir,
-                            &attention_event(&plain, message, now),
-                        )
-                        .is_ok()
-                        {
-                            wake();
-                        }
-                        if row.status != "busy" {
-                            report(
-                                &root,
-                                &plain,
-                                record(
-                                    &plain,
-                                    format!("{}-{}", &sid[..8], row.stamp),
-                                    "waitingForApproval",
-                                    None,
-                                    &row.name,
-                                    &row.cwd,
-                                    row.started,
-                                    now,
-                                    now,
-                                ),
-                            );
-                        }
-                    }
-                    Some("Stop") if row.status != "busy" => {
-                        // The turn is done; the next table read confirms it,
-                        // this makes it immediate. A finished turn raises a
-                        // lasting card, like a wait: one per session, kept
-                        // until a new turn begins or the user closes it.
-                        waits.remove(&plain);
-                        requests.cancel(&wait_id(&plain));
-                        let previous = dones.insert(plain.clone(), row.stamp);
-                        if let Some(old) = previous.filter(|old| *old != row.stamp) {
-                            requests.cancel(&done_id(&plain, old));
-                        }
-                        requests.register_native(
-                            done_id(&plain, row.stamp),
-                            done_card(&plain, &row.name, now),
-                            now,
-                        );
-                        report(
-                            &root,
-                            &plain,
-                            record(
-                                &plain,
-                                format!("{}-{}", &sid[..8], row.stamp),
-                                "completed",
-                                None,
-                                &row.name,
-                                &row.cwd,
-                                row.started,
-                                now,
-                                row.stamp,
-                            ),
-                        );
-                    }
-                    _ => {}
-                }
-            }
             // A wait survives the table's idle/busy flicker: only a moved
             // stamp (the session changed phase — back to work, into a shell,
             // wherever) or a session gone from the table says the wait is
@@ -343,7 +279,6 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                 .map(|sid| format!("{SOURCE}:{sid}"))
                 .collect();
             requests.set_native_waiting(SOURCE, &waiting_full, now);
-            offset = size;
         } else if !failing {
             failing = true;
             l10n_warn(
@@ -376,17 +311,20 @@ fn report(root: &Path, sid: &str, record: Value) -> bool {
 /// A completed turn names its outcome and its real end (the table's status
 /// timestamp, which freezes when the session finished) — what the island's
 /// completion tracker needs to raise one fresh card, now, instead of one
-/// stale card per long-finished session on the next launch.
+/// stale card per long-finished session on the next launch. `message`
+/// carries the turn's last words for the panel row; `parent` names the
+/// session a branched job forked from (claude's ⑂), empty otherwise.
 fn record(
     sid: &str,
     turn: String,
     state: &str,
-    stop: Option<&str>,
     title: &str,
     cwd: &str,
     started: i64,
     now: i64,
     ended: i64,
+    message: &str,
+    parent: &str,
 ) -> Value {
     let mut value = json!({
         "version": 1,
@@ -397,25 +335,40 @@ fn record(
         "state": state,
         "title": title,
         "workspace": cwd,
+        "message": message,
+        "parentId": parent,
     });
     if state == "completed" {
         value["outcome"] = json!("completed");
         value["endedAtMs"] = json!(ended.max(1));
     }
-    if let Some(stop) = stop {
-        value["stopReason"] = json!(stop);
-    }
     value
 }
 
-/// A permission question or an input wait: the balloon over the Clawd.
-fn attention_event(sid: &str, message: String, now: i64) -> HookEvent {
-    HookEvent {
-        source: SOURCE.into(),
-        session_id: format!("{SOURCE}:{sid}"),
-        at_ms: now,
-        kind: "attention".into(),
-        data: json!({"message": message}),
+/// A job timestamp that may be epoch milliseconds (the live table) or an
+/// ISO instant (a state.json), unified to milliseconds.
+fn iso_stamp(row: &Value, key: &str) -> i64 {
+    row[key].as_i64().unwrap_or_else(|| {
+        row[key]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0)
+    })
+}
+
+/// A job's working directory: `originCwd` when present, else roughly
+/// decoded from the transcript path's project folder (claude projects
+/// name folders after the cwd: `-home-yuanjunjie-code` → `/home/…/code`).
+fn cwd_of_scan(job: &Value) -> String {
+    let scan = text(job, "linkScanPath").unwrap_or_default();
+    let Some((_, dir)) = scan.split_once("/projects/") else {
+        return String::new();
+    };
+    let folder = dir.split('/').next().unwrap_or_default();
+    match folder.strip_prefix('-') {
+        Some(rest) => rest.replace('-', "/"),
+        None => String::new(),
     }
 }
 
@@ -515,19 +468,27 @@ fn l10n(zh: &str, en: &str) -> String {
     agent_hud_runtime::l10n::text(zh, en).into()
 }
 
-/// One combined SSH read: the session table, then the log's size and any
-/// bytes past our offset. None when the remote is unreachable.
-fn poll(host: &str, offset: u64) -> Option<(Vec<Value>, Vec<Value>, u64)> {
-    let tail = if offset > 0 {
-        format!("tail -c +{} \"$HOME/{EVENTS_LOG}\" 2>/dev/null", offset + 1)
-    } else {
-        String::new()
-    };
+/// One combined SSH read: the live session table plus the background-jobs
+/// table (every job's `state.json` flattened to one line by a single
+/// remote python). None when the remote is unreachable.
+fn poll(host: &str) -> Option<(Vec<Value>, Vec<Value>)> {
     let script = format!(
         "head -c {SESSIONS_LIMIT} $HOME/.claude/sessions/*.json 2>/dev/null; \
-         echo __EVENTS__; \
-         wc -c < \"$HOME/{EVENTS_LOG}\" 2>/dev/null; \
-         {tail}"
+         echo __JOBS__; \
+         python3 - <<'PY'
+import glob, json, os
+for path in glob.glob(os.path.expanduser('~/.claude/jobs/*/state.json')):
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except Exception:
+        continue
+    row = {{k: d.get(k) for k in (
+        'sessionId', 'name', 'state', 'detail', 'output', 'tokens',
+        'createdAt', 'updatedAt', 'forkParentSessionId', 'originCwd',
+        'linkScanPath')}}
+    print(json.dumps(row, ensure_ascii=False, separators=(',', ':')))
+PY"
     );
     let out = Command::new("ssh")
         .args(["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host, &script])
@@ -537,30 +498,18 @@ fn poll(host: &str, offset: u64) -> Option<(Vec<Value>, Vec<Value>, u64)> {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    let (table_text, rest) = match text.split_once("__EVENTS__\n") {
+    let (table_text, jobs_text) = match text.split_once("__JOBS__\n") {
         Some((before, after)) => (before, after),
         None => (text.as_ref(), ""),
     };
-    // The session table: one JSON object per line, bad lines skipped.
-    let table = table_text
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-    // The log: its size first, then whole lines only (a torn tail waits).
-    let mut lines = rest.lines();
-    let size = lines
-        .next()
-        .and_then(|l| l.trim().parse::<u64>().ok())
-        .unwrap_or(offset);
-    let mut log_lines: Vec<&str> = lines.collect();
-    if !rest.ends_with('\n') {
-        log_lines.pop(); // The last line is torn; it travels next round.
-    }
-    let log: Vec<Value> = log_lines
-        .iter()
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-    Some((table, log, size))
+    // Both tables: one JSON object per line, bad lines skipped.
+    let parse = |chunk: &str| -> Vec<Value> {
+        chunk
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    };
+    Some((parse(table_text), parse(jobs_text)))
 }
 
 fn text(row: &Value, key: &str) -> Option<String> {
@@ -588,28 +537,41 @@ mod tests {
             "8c03067d-1234",
             "8c03067d-1793086819869".into(),
             "completed",
-            None,
             "sandbox1-gpu",
             "/srv",
             1,
             1000,
             990,
+            "提交核验完成",
+            "",
         );
         assert_eq!(done["outcome"], "completed");
         assert_eq!(done["endedAtMs"], 990);
+        assert_eq!(done["message"], "提交核验完成");
         let live = record(
             "8c03067d-1234",
             "8c03067d-1793086819870".into(),
             "running",
-            None,
             "sandbox1-gpu",
             "/srv",
             1,
             1000,
             1000,
+            "",
+            "198ba694-a03e-4b28-84f6-c01f77ae3ae7",
         );
         assert!(live["outcome"].is_null());
         assert!(live["endedAtMs"].is_null());
+        assert_eq!(live["parentId"], "198ba694-a03e-4b28-84f6-c01f77ae3ae7");
+    }
+
+    #[test]
+    fn a_job_timestamp_parses_both_epochs_and_iso_instants() {
+        let mut job = serde_json::json!({"updatedAt": "2026-10-26T10:56:04.554Z"});
+        assert_eq!(iso_stamp(&job, "updatedAt"), 1793012164554);
+        job["updatedAt"] = serde_json::json!(1793012164554_i64);
+        assert_eq!(iso_stamp(&job, "updatedAt"), 1793012164554);
+        assert_eq!(iso_stamp(&serde_json::json!({}), "updatedAt"), 0);
     }
 
     #[test]

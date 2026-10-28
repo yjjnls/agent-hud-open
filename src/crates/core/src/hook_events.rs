@@ -468,6 +468,15 @@ impl HookEvidence {
                 if facts["activity"].is_null() && state != "idle" {
                     facts["activity"] = json!({"work":"command","openCall":null,"toolAt":iso(observed.at_ms),"delegating":false,"awaitsModel":false,"retrying":false,"compactingSince":null});
                 }
+                // The turn's last words, when the observer carries them (the
+                // remote poller's rows do); a completion event's own message
+                // still wins below.
+                if facts["message"].is_null() && observed.data["message"].is_string() {
+                    facts["message"] = observed.data["message"].clone();
+                }
+                if observed.data["parentId"].is_string() {
+                    session["parentId"] = observed.data["parentId"].clone();
+                }
                 session["navigationTarget"] = observed.data["navigationTarget"].clone();
             }
         }

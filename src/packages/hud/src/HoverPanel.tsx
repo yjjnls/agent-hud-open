@@ -13,7 +13,12 @@ import {
   Settings,
 } from "lucide-react";
 import { motion, MotionConfig } from "motion/react";
-import type { Quota, RequestDecision, Snapshot } from "@agent-hud/protocol";
+import type {
+  Quota,
+  RequestDecision,
+  Session,
+  Snapshot,
+} from "@agent-hud/protocol";
 import { Button } from "@agent-hud/ui/components/button";
 import {
   defaultHUDConfig,
@@ -40,7 +45,7 @@ import { SourceTokenChart } from "./panel/TokenChartSection";
 import { SourceIndexing } from "./panel/IndexingSection";
 import { clientDisplayName } from "./model";
 import { ApprovalContent } from "./permissions/ApprovalContent";
-import { snapshotLanguage } from "@agent-hud/ui/format";
+import { age, snapshotLanguage } from "@agent-hud/ui/format";
 
 export { SOURCE_PANEL } from "./panel/theme";
 
@@ -590,9 +595,29 @@ function RemoteSessionsBoard({
   );
   const zh = snapshotLanguage(snapshot) === "zh";
   if (remote.length === 0) return null;
-  const waiting = remote.filter(
-    (session) => session.state === "waiting" || answered.has(session.id),
+  const isWaiting = (session: Session) =>
+    session.state === "waiting" || answered.has(session.id);
+  // The remote list's own order: who waits first, then who runs, then the
+  // finished — each group newest first, like claude's own resume list.
+  const rank = (session: Session) =>
+    isWaiting(session) ? 0 : session.state === "running" ? 1 : 2;
+  const fresh = (a: Session, b: Session) =>
+    Date.parse(b.lastMessageAt ?? b.updatedAt) -
+    Date.parse(a.lastMessageAt ?? a.updatedAt);
+  const ordered = [...remote].sort((a, b) => rank(a) - rank(b) || fresh(a, b));
+  const waitingCount = ordered.filter(isWaiting).length;
+  const runningCount = ordered.filter(
+    (session) => !isWaiting(session) && session.state === "running",
   ).length;
+  // A bare "2m/3h/9d", the style claude's own list prints next to a name.
+  const ago = (session: Session) => {
+    const now = Date.parse(snapshot.generatedAt);
+    const at = Date.parse(session.lastMessageAt ?? session.updatedAt);
+    if (!Number.isFinite(at) || !Number.isFinite(now)) return "";
+    return age(Math.max(0, (now - at) / 1000), zh ? "zh" : "en")
+      .replace(" ago", "")
+      .replace(" 前", "");
+  };
   return (
     <div
       data-hud-section="remote-sessions"
@@ -611,43 +636,28 @@ function RemoteSessionsBoard({
         <strong style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
           {zh ? "远程会话" : "Remote sessions"}
         </strong>
-        {waiting > 0 && (
-          <span
-            style={{
-              marginLeft: "auto",
-              fontSize: 10,
-              fontWeight: 600,
-              fontVariantNumeric: "tabular-nums",
-              color: colors.warningText,
-              padding: "2px 6px",
-              borderRadius: 999,
-              background: "rgba(233, 161, 109, 0.16)",
-            }}
-          >
-            {zh ? `${waiting} 个等待回答` : `${waiting} waiting`}
-          </span>
-        )}
+        <span
+          style={{
+            marginLeft: "auto",
+            fontSize: 10,
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+            padding: "2px 6px",
+            borderRadius: 999,
+            color: waitingCount > 0 ? colors.warningText : colors.secondary,
+            background:
+              waitingCount > 0 ? "rgba(233, 161, 109, 0.16)" : "transparent",
+          }}
+        >
+          {zh
+            ? `${waitingCount} 等待 · ${runningCount} 运行 · ${ordered.length - waitingCount - runningCount} 完成`
+            : `${waitingCount} waiting · ${runningCount} running · ${ordered.length - waitingCount - runningCount} done`}
+        </span>
       </div>
-      {remote.map((session) => {
-        const isWaiting =
-          session.state === "waiting" || answered.has(session.id);
-        const running = session.state === "running";
-        const label = isWaiting
-          ? zh
-            ? "等待回答"
-            : "Waiting"
-          : running
-            ? zh
-              ? "运行中"
-              : "Running"
-            : zh
-              ? "空闲"
-              : "Idle";
-        const tint = isWaiting
-          ? colors.warningText
-          : running
-            ? colors.text
-            : colors.secondary;
+      {ordered.map((session) => {
+        const waiting = isWaiting(session);
+        const running = !waiting && session.state === "running";
+        const message = session.liveFacts?.message?.trim() ?? "";
         return (
           <div
             key={session.id}
@@ -667,7 +677,7 @@ function RemoteSessionsBoard({
                 borderRadius: 999,
                 flex: "0 0 auto",
                 alignSelf: "center",
-                background: isWaiting
+                background: waiting
                   ? colors.warning
                   : running
                     ? colors.ok
@@ -679,21 +689,38 @@ function RemoteSessionsBoard({
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                color: isWaiting ? colors.warningText : colors.text,
-                fontWeight: isWaiting ? 600 : 400,
+                flexShrink: 0,
+                maxWidth: 180,
+                color: waiting ? colors.warningText : colors.text,
+                fontWeight: waiting ? 600 : 400,
               }}
             >
+              {session.parentId ? "⑂ " : ""}
               {session.title || session.id}
             </span>
             <span
               style={{
-                marginLeft: "auto",
-                fontSize: 11,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                color: tint,
+                flex: 1,
+                minWidth: 32,
+                fontSize: 11,
+                color: colors.secondary,
               }}
             >
-              {label}
+              {message}
+            </span>
+            <span
+              style={{
+                flexShrink: 0,
+                fontSize: 11,
+                fontVariantNumeric: "tabular-nums",
+                whiteSpace: "nowrap",
+                color: colors.tertiary,
+              }}
+            >
+              {ago(session)}
             </span>
           </div>
         );

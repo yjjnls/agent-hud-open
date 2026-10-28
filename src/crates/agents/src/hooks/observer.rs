@@ -72,7 +72,10 @@ pub fn parse_observation(source: &str, record: &Value) -> Result<HookEvent, Stri
     };
     // An observer that saw the turn end names that moment; records without
     // it stay shape-for-shape what they were.
-    let mut data = json!({"turnId":turn,"state":state,"startedAtMs":start,"observedAtMs":at,"title":record["title"].as_str(),"workspace":record["workspace"].as_str(),"sessionFile":record["sessionFile"].as_str(),"model":record["model"].as_str(),"providerId":record["providerID"].as_str(),"outcome":outcome,"navigationTarget":target});
+    let mut data = json!({"turnId":turn,"state":state,"startedAtMs":start,"observedAtMs":at,"title":record["title"].as_str(),"workspace":record["workspace"].as_str(),"sessionFile":record["sessionFile"].as_str(),"model":record["model"].as_str(),"providerId":record["providerID"].as_str(),"outcome":outcome,"navigationTarget":target,"message":record["message"].as_str(),"parentId":record["parentId"].as_str()});
+    if let Some(ended) = record["endedAtMs"].as_i64() {
+        data["endedAtMs"] = json!(ended);
+    }
     if let Some(ended) = record["endedAtMs"].as_i64() {
         data["endedAtMs"] = json!(ended);
     }
