@@ -342,15 +342,45 @@ function AppContent({
   useEffect(() => {
     if (!surface || !isTauri()) return;
     let frames = 0;
+    let lastFrames = 0;
     const pulse = () => {
       frames += 1;
       requestAnimationFrame(pulse);
     };
     requestAnimationFrame(pulse);
     const clock = setInterval(() => {
+      const strip = document.querySelector(".hud-mark-strip");
+      const marks = document.querySelectorAll(".hud-agent-mark");
+      let dom = "nostrip";
+      if (strip) {
+        const box = strip.getBoundingClientRect();
+        dom = `${marks.length}marks strip=[${Math.round(box.left)},${Math.round(box.top)} ${Math.round(box.width)}x${Math.round(box.height)}]`;
+        const first = marks[0]?.getBoundingClientRect();
+        if (first)
+          dom += ` first=[${Math.round(first.left)},${Math.round(first.top)} ${Math.round(first.width)}x${Math.round(first.height)}]`;
+        const canvases = document.querySelectorAll("canvas");
+        const parts: string[] = [];
+        canvases.forEach((canvas) => {
+          const box = canvas.getBoundingClientRect();
+          let painted = -1;
+          try {
+            const ctx = canvas.getContext("2d");
+            if (ctx && canvas.width > 0 && canvas.height > 0) {
+              const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+              painted = 0;
+              for (let i = 3; i < data.length; i += 16) if (data[i] > 10) painted += 1;
+            }
+          } catch {
+            painted = -2;
+          }
+          parts.push(`[${Math.round(box.width)}x${Math.round(box.height)} p=${painted}]`);
+        });
+        dom += ` canvases=${parts.join("") || "none"}`;
+      }
       void invoke("debug_note", {
-        note: `${new Date().toISOString()} label=${getCurrentWebviewWindow().label} vis=${document.visibilityState} raf=${frames}`,
+        note: `${new Date().toISOString()} label=${getCurrentWebviewWindow().label} vis=${document.visibilityState} raf=${frames - lastFrames} dom=${dom}`,
       }).catch(() => {});
+      lastFrames = frames;
     }, 1000);
     return () => {
       clearInterval(clock);

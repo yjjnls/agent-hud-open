@@ -718,4 +718,37 @@ mod tests {
         }
         assert!(steps >= 150);
     }
+
+    /// The remote poller reports Claude Code sessions under their own source,
+    /// and the mark folds it into claude: a running one must drive the claude
+    /// bot with the generic thinking look, not open a queue no strip looks up.
+    #[test]
+    fn a_running_remote_session_drives_the_claude_bot() {
+        let at = 1_792_470_000_000i64;
+        let now = at as f64 / 1000.0;
+        let iso = chrono::DateTime::from_timestamp_millis(at)
+            .unwrap()
+            .to_rfc3339();
+        let snapshot = json!({
+            "sessions": [{
+                "id": "claude-remote:39dc2da1-f269-4b44-8761-624fbf5ea091",
+                "source": "claude-remote",
+                "state": "running",
+                "title": "remote job",
+                "updatedAt": iso,
+                "liveFacts": {
+                    "observedAt": iso,
+                    "activity": {
+                        "work": "thinking", "openCall": null, "toolAt": iso,
+                        "delegating": false, "awaitsModel": false,
+                        "retrying": false, "compactingSince": null,
+                    },
+                },
+            }],
+        });
+        let mut director = Director::new(now);
+        director.read(&snapshot, now);
+        let wire = director.wire();
+        assert_eq!(wire["directions"]["claude"]["state"]["look"], "thinking");
+    }
 }

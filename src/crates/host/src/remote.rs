@@ -20,7 +20,10 @@ use std::{
 
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
-const POLL: Duration = Duration::from_secs(30);
+/// Fresh enough that a session's observation re-report always lands inside
+/// lookOf's 10 s toolAt freshness window, so a live remote session holds the
+/// working look instead of falling back to the thinking one.
+const POLL: Duration = Duration::from_secs(8);
 /// The SSH host, as named in the ssh config; the environment wins.
 const HOST_ENV: &str = "AGENTHUD_REMOTE_HOST";
 const DEFAULT_HOST: &str = "yjj-dev";
@@ -208,8 +211,8 @@ fn run(host: String, data_dir: PathBuf, wake: Wake) {
         } else if !failing {
             failing = true;
             l10n_warn(
-                &format!("远程 {host} 暂时读不到（每 30 秒重试）"),
-                &format!("The remote {host} is unreachable (retrying every 30 s)"),
+                &format!("远程 {host} 暂时读不到（每 8 秒重试）"),
+                &format!("The remote {host} is unreachable (retrying every 8 s)"),
             );
         }
         std::thread::sleep(POLL);

@@ -102,7 +102,10 @@ fn push_unique(list: &mut Vec<String>, value: &str) {
 pub fn mark(source: &str) -> String {
     let key = collapse(source, |c| c.is_whitespace() || c == '_');
     match key.as_str() {
-        "claude-code" | "anthropic" => "claude".into(),
+        // Same fold as the front end's aliases (agent-artwork.ts): the host
+        // directs bot queues by mark, and a key no HUD strip looks up would
+        // leave the bot still while remote sessions run.
+        "claude-code" | "claude-remote" | "anthropic" => "claude".into(),
         "chatgpt" | "codex" | "codex-cli" => "openai".into(),
         "github-copilot" => "copilot".into(),
         "grok-cli" => "grok".into(),
@@ -1341,4 +1344,18 @@ pub(super) fn project_match(value: &Value, snapshot: &Value, held: &[Value]) -> 
             .push(format!("sessions.projects[{index}]: {message}"));
     }
     found
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use super::mark;
+
+    /// The remote poller reports Claude Code sessions under their own source,
+    /// and the front end folds that source into the claude mark; the host must
+    /// too, or its bot directions name a queue no HUD strip looks up and the
+    /// bot stays plain while remote sessions run.
+    #[test]
+    fn the_remote_claude_source_shares_the_claude_mark() {
+        assert_eq!(mark("claude-remote"), mark("claude"));
+    }
 }
