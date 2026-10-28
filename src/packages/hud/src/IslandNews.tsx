@@ -105,7 +105,8 @@ export function useIslandNews(
 ) {
   const services = usePanelServices(),
     seen = useRef<Set<string> | null>(null),
-    seenRequests = useRef<Set<string> | null>(null);
+    seenRequests = useRef<Set<string> | null>(null),
+    picked = useRef<string | null>(null);
   const [queue, setQueue] = useState<IslandCard[]>([]);
   const items = snapshot.islandEvents?.items ?? [];
   const requestIDs = requests.map((request) => request.id).join("\0");
@@ -159,11 +160,19 @@ export function useIslandNews(
     if (!current || held || current.type === "request") return;
     // A completion names a finished turn the user wants to catch before it
     // turns; quota notices repeat, so they may move along quickly.
-    const seconds = current.event?.kind === "completion" ? 12 : 4;
+    // A card the user picked themselves deserves a long look before it
+    // turns; unsolicited news turns at its own pace.
+    const seconds =
+      picked.current === current.id
+        ? 30
+        : current.event?.kind === "completion"
+          ? 12
+          : 4;
     const timer = setTimeout(dismiss, seconds * 1000);
     return () => clearTimeout(timer);
   }, [current?.id, held]);
-  const select = (id: string) =>
+  const select = (id: string) => {
+    picked.current = id;
     setQueue((previous) => {
       const at = previous.findIndex((card) => card.id === id);
       if (at <= 0) return previous;
@@ -171,6 +180,7 @@ export function useIslandNews(
       [next[0], next[at]] = [next[at], next[0]];
       return next;
     });
+  };
   return {
     event: current?.type === "news" ? current.event : undefined,
     inUsagePanel:

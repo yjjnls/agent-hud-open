@@ -59,6 +59,14 @@ struct Row {
     cwd: String,
 }
 
+/// A session's unanswered wait: the table stamp the wait began at, plus the
+/// words its card shows for as long as the wait lasts.
+struct Wait {
+    stamp: i64,
+    title: String,
+    message: String,
+}
+
 fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
     // The observer root the agent's descriptor names, beside Claude Code's
     // own files; each session gets one record file, rewritten in place as
@@ -76,10 +84,10 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
     // The table as last seen: session id → row.
     let mut live: HashMap<String, Row> = HashMap::new();
     // Sessions waiting on an input or a permission: the remote session id →
-    // the table stamp at the moment the wait began. A wait outlives the
-    // table's idle/busy flicker — only a new turn (a different stamp) or a
-    // gone session says the user answered, however long the wait takes.
-    let mut waits: HashMap<String, i64> = HashMap::new();
+    // what the wait looks like. A wait outlives the table's idle/busy
+    // flicker — only a new turn (a different stamp) or a gone session says
+    // the user answered, however long the wait takes.
+    let mut waits: HashMap<String, Wait> = HashMap::new();
     // A failed read is quiet — the remote may be asleep — but its first
     // appearance is worth one line, as is its clearing.
     let mut failing = false;
@@ -166,7 +174,6 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                         // The balloon over the Clawd rides the hook inbox;
                         // the waiting state rides the observer record; the
                         // island's waiting card rides the requests owner.
-                        waits.insert(plain.clone(), row.stamp);
                         let message = text(&line, "msg").unwrap_or_else(|| {
                             if text(&line, "event").as_deref() == Some("PermissionRequest") {
                                 "等待权限审批".into()
@@ -174,6 +181,14 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
                                 "等待输入".into()
                             }
                         });
+                        waits.insert(
+                            plain.clone(),
+                            Wait {
+                                stamp: row.stamp,
+                                title: row.name.clone(),
+                                message: message.clone(),
+                            },
+                        );
                         requests.register_native(
                             wait_id(&plain),
                             wait_card(&plain, &row.name, &message, now),
@@ -232,17 +247,26 @@ fn run(host: String, data_dir: PathBuf, requests: Requests, wake: Wake) {
             // A wait survives the table's idle/busy flicker: only a new turn
             // on the same session (a stamp that moved past the one the wait
             // began at) or a session gone from the table says the user
-            // answered. A waiting card rides its wait, so it closes with it.
-            waits.retain(|sid, began| match seen.get(sid) {
+            // answered. Its card rides the wait: re-raising it every pass is
+            // free while it stands, brings it back when its hold ran out, and
+            // stays silent once the user has dismissed it themselves.
+            waits.retain(|sid, wait| match seen.get(sid) {
                 None => {
                     requests.cancel(&wait_id(sid));
                     false
                 }
-                Some(row) if row.status == "busy" && row.stamp != *began => {
+                Some(row) if row.status == "busy" && row.stamp != wait.stamp => {
                     requests.cancel(&wait_id(sid));
                     false
                 }
-                Some(_) => true,
+                Some(_) => {
+                    requests.register_native(
+                        wait_id(sid),
+                        wait_card(sid, &wait.title, &wait.message, now),
+                        now,
+                    );
+                    true
+                }
             });
             let waiting_full: Vec<String> = waits
                 .keys()

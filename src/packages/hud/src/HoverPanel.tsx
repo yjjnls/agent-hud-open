@@ -38,6 +38,7 @@ import {
 } from "./panel/theme";
 import { SourceTokenChart } from "./panel/TokenChartSection";
 import { SourceIndexing } from "./panel/IndexingSection";
+import { clientDisplayName } from "./IslandNews";
 import { snapshotLanguage } from "@agent-hud/ui/format";
 
 export { SOURCE_PANEL } from "./panel/theme";
@@ -330,6 +331,13 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
               {inlineAlert}
             </div>
           )}
+          <RemoteSessionsBoard
+            snapshot={snapshot}
+            light={light}
+            colors={colors}
+            config={config}
+          />
+          <PendingRequestsBoard snapshot={snapshot} light={light} colors={colors} />
           {snapshot.indexing?.kind && (
             <div
               data-hud-section="indexing"
@@ -535,6 +543,250 @@ type DraftState = NonNullable<
 
 /** What waits (Open's PanelDraftBar.title): a layout, with or without a
  * style, a style alone, or the app's settings alone. */
+/** The remote sessions at a glance: who runs, who idles, and who waits for
+ * an answer — the wait a waiting card on the island carries. */
+function RemoteSessionsBoard({
+  snapshot,
+  light,
+  colors,
+  config,
+}: {
+  snapshot: Snapshot;
+  light: boolean;
+  colors: ReturnType<typeof palette>;
+  config: HUDConfig;
+}) {
+  const remote = useMemo(
+    () =>
+      snapshot.sessions.filter(
+        (session) => session.source === "claude-remote",
+      ),
+    [snapshot.sessions],
+  );
+  const answered = useMemo(
+    () =>
+      new Set(
+        snapshot.approvals
+          .filter((request) => request.source === "claude-remote")
+          .map((request) => request.sessionId),
+      ),
+    [snapshot.approvals],
+  );
+  const zh = snapshotLanguage(snapshot) === "zh";
+  if (remote.length === 0) return null;
+  const waiting = remote.filter(
+    (session) => session.state === "waiting" || answered.has(session.id),
+  ).length;
+  return (
+    <div
+      data-hud-section="remote-sessions"
+      style={
+        config.panelLayout.style?.separators !== false
+          ? {
+              display: "grid",
+              gap: "var(--hud-session-gap, 6px)",
+              boxShadow: `inset 0 -1px 0 ${colors.divider}`,
+              paddingBottom: "var(--hud-divided-gap)",
+            }
+          : { display: "grid", gap: "var(--hud-session-gap, 6px)" }
+      }
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <strong style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+          {zh ? "远程会话" : "Remote sessions"}
+        </strong>
+        {waiting > 0 && (
+          <span
+            style={{
+              marginLeft: "auto",
+              fontSize: 10,
+              fontWeight: 600,
+              fontVariantNumeric: "tabular-nums",
+              color: colors.warningText,
+              padding: "2px 6px",
+              borderRadius: 999,
+              background: "rgba(233, 161, 109, 0.16)",
+            }}
+          >
+            {zh ? `${waiting} 个等待回答` : `${waiting} waiting`}
+          </span>
+        )}
+      </div>
+      {remote.map((session) => {
+        const isWaiting =
+          session.state === "waiting" || answered.has(session.id);
+        const running = session.state === "running";
+        const label = isWaiting
+          ? zh
+            ? "等待回答"
+            : "Waiting"
+          : running
+            ? zh
+              ? "运行中"
+              : "Running"
+            : zh
+              ? "空闲"
+              : "Idle";
+        const tint = isWaiting
+          ? colors.warningText
+          : running
+            ? colors.text
+            : colors.secondary;
+        return (
+          <div
+            key={session.id}
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 8,
+              fontSize: 12,
+              lineHeight: "16px",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                flex: "0 0 auto",
+                alignSelf: "center",
+                background: isWaiting
+                  ? colors.warning
+                  : running
+                    ? colors.ok
+                    : colors.tertiary,
+              }}
+            />
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: isWaiting ? colors.warningText : colors.text,
+                fontWeight: isWaiting ? 600 : 400,
+              }}
+            >
+              {session.title || session.id}
+            </span>
+            <span
+              style={{
+                marginLeft: "auto",
+                fontSize: 11,
+                whiteSpace: "nowrap",
+                color: tint,
+              }}
+            >
+              {label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The island's pending answers, listed: every request that waits, local or
+ * remote, with the source it came from. The island card is where an answer
+ * goes; this board is where they are all visible at once. */
+function PendingRequestsBoard({
+  snapshot,
+  light,
+  colors,
+}: {
+  snapshot: Snapshot;
+  light: boolean;
+  colors: ReturnType<typeof palette>;
+}) {
+  const pending = snapshot.approvals;
+  const zh = snapshotLanguage(snapshot) === "zh";
+  if (pending.length === 0) return null;
+  return (
+    <div
+      data-hud-section="pending-requests"
+      style={{
+        display: "grid",
+        gap: "var(--hud-session-gap, 6px)",
+        boxShadow: `inset 0 -1px 0 ${colors.divider}`,
+        paddingBottom: "var(--hud-divided-gap)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <strong style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+          {zh ? "待处理" : "Waiting"}
+        </strong>
+        <span
+          style={{
+            marginLeft: "auto",
+            fontSize: 10,
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+            color: colors.warningText,
+            padding: "2px 6px",
+            borderRadius: 999,
+            background: "rgba(233, 161, 109, 0.16)",
+          }}
+        >
+          {pending.length}
+        </span>
+      </div>
+      {pending.map((request) => {
+        const question = (request.questions ?? [])[0];
+        const label =
+          request.title?.trim() ||
+          question?.header?.trim() ||
+          question?.question?.trim() ||
+          clientDisplayName(request.source);
+        return (
+          <div
+            key={request.id}
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 8,
+              fontSize: 12,
+              lineHeight: "16px",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: 999,
+                flex: "0 0 auto",
+                alignSelf: "center",
+                background: colors.warning,
+              }}
+            />
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: colors.warningText,
+                fontWeight: 600,
+              }}
+            >
+              {label}
+            </span>
+            <span
+              style={{
+                marginLeft: "auto",
+                fontSize: 11,
+                whiteSpace: "nowrap",
+                color: colors.secondary,
+              }}
+            >
+              {clientDisplayName(request.source)}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function draftTitle(draft: DraftState, language: "en" | "zh") {
   const zh = language === "zh";
   if (draft.layout) return zh ? "布局未保存" : "Unsaved layout";
