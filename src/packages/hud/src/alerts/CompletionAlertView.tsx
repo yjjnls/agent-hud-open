@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import type { IslandEvent, Session, Snapshot } from "@agent-hud/protocol";
 import { usePanelServices } from "../PanelContext";
-import { clientDisplayName, compactDuration, newsTitle } from "../IslandNews";
+import { clientDisplayName, compactDuration, newsTitle } from "../model";
 import { ReminderMark } from "./ReminderMark";
 import { dateFormat, snapshotLanguage } from "@agent-hud/ui/format";
 import { alertFill, alertInk, alertText, onAlertFill } from "../tokens";

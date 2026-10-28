@@ -1,33 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import type { Approval, IslandEvent, Snapshot } from "@agent-hud/protocol";
+import type { Approval, Snapshot } from "@agent-hud/protocol";
 import { usePanelServices } from "./PanelContext";
-import { agentVendorName, sourceID, vendorKey } from "./model";
-import { CompletionAlertView } from "./alerts/CompletionAlertView";
-import { QuotaAlertView, ResetCreditAlertView } from "./alerts/QuotaAlertViews";
-import { snapshotLanguage } from "@agent-hud/ui/format";
-
-export { ReminderMark } from "./alerts/ReminderMark";
-export {
+import { sourceID, vendorKey } from "./model";
+import {
   dismissIslandCard,
   reconcileIslandCards,
   type IslandCard,
 } from "./island-queue";
-export {
-  CompactAlertView,
-  compactAlertDockWidth,
-  compactAlertLabels,
-  compactQuotaStatus,
-} from "./alerts/CompactAlertView";
-export {
-  CompletionClosedRow,
-  PendingEventRows,
-  PermissionClosedRow,
-  PermissionRowHead,
-  WaitedLabel,
-  permissionToolBadge,
-} from "./alerts/PendingEventRows";
 
-/** Presentation only: Core is the sole producer/deduplicator of event facts. */
+/** Presentation only: Core is the sole producer/deduplicator of event facts.
+ * Deliberately free of re-exports and alert-view imports: the alert views
+ * import these helpers in turn, and a second edge here is a bundling cycle
+ * that hoists `reconcileIslandCards` out of reach (ReferenceError at boot). */
 export function useIslandNews(
   snapshot: Snapshot,
   held: boolean,
@@ -127,102 +111,4 @@ export function useIslandNews(
     select,
     dismiss,
   };
-}
-
-export const newsTitle = (event: IslandEvent, zh = false) =>
-  event.kind === "completion"
-    ? zh
-      ? "有新回复"
-      : "New reply"
-    : event.kind === "quota-reset"
-      ? zh
-        ? "额度已重置"
-        : "Quota reset"
-      : event.kind === "reset-credits"
-        ? zh
-          ? "获得使用重置"
-          : "Usage resets added"
-        : zh
-          ? "额度预警"
-          : "Running low";
-
-export const compactDuration = (seconds: number) => {
-  const total = Math.max(0, Math.round(seconds)),
-    h = Math.floor(total / 3600),
-    m = Math.floor((total % 3600) / 60);
-  return h > 0 ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m`;
-};
-
-export function clientDisplayName(source: string): string {
-  const normalized = source.trim().toLowerCase();
-  if (normalized === "codex" || normalized === "codex-cli") return "Codex";
-  return agentVendorName(source);
-}
-
-export function projectName(cwd?: string | null): string | null {
-  if (!cwd) return null;
-  const trimmed = cwd.replace(/[\\/]+$/, "");
-  const name = trimmed.split(/[\\/]/).pop();
-  return name && name.length > 0 ? name : null;
-}
-
-export function shortenHomePath(path?: string | null): string | null {
-  if (!path) return null;
-  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
-}
-
-export function NewsContent({
-  event,
-  snapshot,
-  dismiss,
-  onStats,
-  handoff,
-  light = false,
-  botLogos = true,
-}: {
-  event: IslandEvent;
-  snapshot: Snapshot;
-  dismiss: () => void;
-  onStats?: () => void;
-  handoff?: (callback?: () => void) => void;
-  light?: boolean;
-  botLogos?: boolean;
-}) {
-  const zh = snapshotLanguage(snapshot) === "zh";
-  if (event.kind === "completion") {
-    return (
-      <CompletionAlertView
-        event={event}
-        snapshot={snapshot}
-        dismiss={dismiss}
-        onStats={onStats}
-        handoff={handoff}
-        light={light}
-        botLogos={botLogos}
-      />
-    );
-  }
-  if (event.kind === "reset-credits") {
-    return (
-      <ResetCreditAlertView
-        event={event}
-        snapshot={snapshot}
-        dismiss={dismiss}
-        onStats={onStats}
-        light={light}
-        botLogos={botLogos}
-        zh={zh}
-      />
-    );
-  }
-  return (
-    <QuotaAlertView
-      event={event}
-      dismiss={dismiss}
-      onStats={onStats}
-      light={light}
-      botLogos={botLogos}
-      zh={zh}
-    />
-  );
 }

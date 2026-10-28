@@ -12,7 +12,7 @@ import type {
   RequestAnswer,
   RequestDecision,
 } from "@agent-hud/protocol";
-import { clientDisplayName } from "../IslandNews";
+import { clientDisplayName } from "../model";
 import { alertFill, alertText, onAlertFill, permissionColors } from "../tokens";
 import { useGround } from "../ground";
 import { cardColumn } from "../card-column";

@@ -20,8 +20,8 @@ import {
   compactDuration,
   newsTitle,
   projectName,
-  type IslandCard,
-} from "../IslandNews";
+} from "../model";
+import type { IslandCard } from "../island-queue";
 import { alertText } from "../tokens";
 import { useGround } from "../ground";
 import { cardColumn } from "../card-column";

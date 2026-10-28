@@ -8,8 +8,8 @@ import { cardColumn } from "../card-column";
 import {
   PermissionClosedRow,
   PermissionRowHead,
-  shortenHomePath,
-} from "../IslandNews";
+} from "../alerts/PendingEventRows";
+import { shortenHomePath } from "../model";
 import { alertText } from "../tokens";
 import { useGround } from "../ground";
 

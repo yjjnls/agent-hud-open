@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { ArrowUp, Check, CheckCheck, MessageSquare, X } from "lucide-react";
 import type { Approval, RequestDecision } from "@agent-hud/protocol";
-import { clientDisplayName } from "../IslandNews";
+import { clientDisplayName } from "../model";
 import { inlineMarkdown } from "@agent-hud/ui/text/inline-markdown";
 import { alertFill, onAlertFill, permissionColors } from "../tokens";
 import { useGround } from "../ground";

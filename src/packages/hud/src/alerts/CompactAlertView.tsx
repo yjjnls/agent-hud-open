@@ -2,7 +2,7 @@ import { Flame, Hand, MessageSquareText, RotateCcw } from "lucide-react";
 import type { Approval, IslandEvent } from "@agent-hud/protocol";
 import { labelWidth } from "../geometry";
 import { agentVendorName } from "../model";
-import { clientDisplayName, projectName } from "../IslandNews";
+import { clientDisplayName, projectName } from "../model";
 import { ReminderMark } from "./ReminderMark";
 import { quotaAlertCopy } from "./quota-alert-copy";
 import { systemCalendar } from "@agent-hud/ui/format";

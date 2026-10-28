@@ -22,11 +22,18 @@ const request = (id: string, at: string): Approval =>
 
 const cards = (queue: IslandCard[]) => queue.map((c) => `${c.type}:${c.id}`);
 
+const news = (id: string, at: string): IslandCard => ({
+  type: "news",
+  id,
+  at,
+  event: { id, kind: "completion", at, source: "claude-remote", sessionId: id },
+});
+
 test("answering one of several requests keeps the others and the news", () => {
   const previous: IslandCard[] = [
     { type: "request", id: "a", at: "2026-10-28T10:00:00Z" },
     { type: "request", id: "b", at: "2026-10-28T10:01:00Z" },
-    { type: "news", id: "c", at: "2026-10-28T10:02:00Z" },
+    news("c", "2026-10-28T10:02:00Z"),
   ];
   // The user answered a; b still waits, c is still news.
   // c was already shown; only fresh events travel in `visible`.
@@ -46,7 +53,7 @@ test("dismissing the front card promotes the next waiting one, not a clear-out",
   const previous: IslandCard[] = [
     { type: "request", id: "a", at: "2026-10-28T10:00:00Z" },
     { type: "request", id: "b", at: "2026-10-28T10:01:00Z" },
-    { type: "news", id: "c", at: "2026-10-28T10:02:00Z" },
+    news("c", "2026-10-28T10:02:00Z"),
   ];
   const next = dismissIslandCard(previous);
   assert.equal(cards(next).length, 2, "one card goes, the queue stays");

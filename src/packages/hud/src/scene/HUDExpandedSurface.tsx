@@ -8,7 +8,7 @@ import type {
 } from "@agent-hud/protocol";
 import { HUDArtwork as HUDLogo } from "../HUDArtwork";
 import AnimatedContent from "@agent-hud/ui/react-bits/AnimatedContent";
-import { CompactAlertView } from "../IslandNews";
+import { CompactAlertView } from "../alerts/CompactAlertView";
 import { RequestDeliveryNotice } from "../permissions/ApprovalContent";
 import { SourceHoverPanel } from "../HoverPanel";
 import type { HUDRect } from "../geometry";

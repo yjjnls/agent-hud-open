@@ -38,7 +38,7 @@ import {
 } from "./panel/theme";
 import { SourceTokenChart } from "./panel/TokenChartSection";
 import { SourceIndexing } from "./panel/IndexingSection";
-import { clientDisplayName } from "./IslandNews";
+import { clientDisplayName } from "./model";
 import { ApprovalContent } from "./permissions/ApprovalContent";
 import { snapshotLanguage } from "@agent-hud/ui/format";
 
@@ -347,7 +347,6 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
           )}
           <RemoteSessionsBoard
             snapshot={snapshot}
-            light={light}
             colors={colors}
             config={config}
           />
@@ -566,12 +565,10 @@ type DraftState = NonNullable<
  * an answer — the wait a waiting card on the island carries. */
 function RemoteSessionsBoard({
   snapshot,
-  light,
   colors,
   config,
 }: {
   snapshot: Snapshot;
-  light: boolean;
   colors: ReturnType<typeof palette>;
   config: HUDConfig;
 }) {

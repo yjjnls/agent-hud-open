@@ -5,7 +5,7 @@ import type {
   RequestDelivery,
   Snapshot,
 } from "@agent-hud/protocol";
-import { compactAlertDockWidth } from "../IslandNews";
+import { compactAlertDockWidth } from "../alerts/CompactAlertView";
 import {
   cardRect,
   dragSurfaceGeometry,

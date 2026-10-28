@@ -1,5 +1,6 @@
 import hudDefaults from "@agent-hud/protocol/hud-defaults.json";
 import type {
+  IslandEvent,
   PanelLayout,
   Quota,
   RequestDecision,
@@ -241,6 +242,51 @@ export function sourcesForMark(snapshot: Snapshot, mark: string): string[] {
 export function quotaAccountKey(row: Quota): string {
   return row.accountId ?? row.account ?? "unassigned";
 }
+
+/** Shared island copy helpers. They live here — outside IslandNews — so the
+ * alert views can import them without importing IslandNews back (the news
+ * module imports the alert views; a second edge made a bundling cycle). */
+export function clientDisplayName(source: string): string {
+  const normalized = source.trim().toLowerCase();
+  if (normalized === "codex" || normalized === "codex-cli") return "Codex";
+  return agentVendorName(source);
+}
+
+export function projectName(cwd?: string | null): string | null {
+  if (!cwd) return null;
+  const trimmed = cwd.replace(/[\\/]+$/, "");
+  const name = trimmed.split(/[\\/]/).pop();
+  return name && name.length > 0 ? name : null;
+}
+
+export function shortenHomePath(path?: string | null): string | null {
+  if (!path) return null;
+  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
+}
+
+export const newsTitle = (event: IslandEvent, zh = false) =>
+  event.kind === "completion"
+    ? zh
+      ? "有新回复"
+      : "New reply"
+    : event.kind === "quota-reset"
+      ? zh
+        ? "额度已重置"
+        : "Quota reset"
+      : event.kind === "reset-credits"
+        ? zh
+          ? "获得使用重置"
+          : "Usage resets added"
+        : zh
+          ? "额度预警"
+          : "Running low";
+
+export const compactDuration = (seconds: number) => {
+  const total = Math.max(0, Math.round(seconds)),
+    h = Math.floor(total / 3600),
+    m = Math.floor((total % 3600) / 60);
+  return h > 0 ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m`;
+};
 export {
   inRowOrder,
   quotaRowHidden,
