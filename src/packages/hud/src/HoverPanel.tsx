@@ -46,6 +46,7 @@ import { SourceIndexing } from "./panel/IndexingSection";
 import { clientDisplayName } from "./model";
 import { ApprovalContent } from "./permissions/ApprovalContent";
 import { age, snapshotLanguage } from "@agent-hud/ui/format";
+import { groupRemoteSessions, REMOTE_OTHER_GROUP } from "./remote-groups";
 
 export { SOURCE_PANEL } from "./panel/theme";
 
@@ -593,6 +594,20 @@ function RemoteSessionsBoard({
       ),
     [snapshot.approvals],
   );
+  // The names carry the user's own taxonomy, so the board folds itself into
+  // their groups; a single flat group renders exactly as it did ungrouped.
+  const groups = useMemo(
+    () =>
+      groupRemoteSessions(remote, (session) =>
+        session.state === "waiting" || answered.has(session.id)
+          ? 0
+          : session.state === "running"
+            ? 1
+            : 2,
+      ),
+    [remote, answered],
+  );
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const zh = snapshotLanguage(snapshot) === "zh";
   if (remote.length === 0) return null;
   const isWaiting = (session: Session) =>
@@ -653,90 +668,164 @@ function RemoteSessionsBoard({
             : `${waitingCount} waiting · ${runningCount} running · ${ordered.length - waitingCount - runningCount} done`}
         </span>
       </div>
-      {ordered.map((session) => {
-        const waiting = isWaiting(session);
-        const running = !waiting && session.state === "running";
-        const message = session.liveFacts?.message?.trim() ?? "";
-        // A finished row gone quiet for over half an hour steps back —
-        // the active few stand out of the long tail.
-        const now = Date.parse(snapshot.generatedAt);
-        const at = Date.parse(session.lastMessageAt ?? session.updatedAt);
-        const stale =
-          !waiting &&
-          !running &&
-          Number.isFinite(now) &&
-          Number.isFinite(at) &&
-          now - at > 30 * 60_000;
-        return (
-          <div
-            key={session.id}
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 8,
-              fontSize: 12,
-              lineHeight: "16px",
-              opacity: stale ? 0.45 : 1,
-            }}
-          >
-            <span
-              aria-hidden
+      {(() => {
+        const row = (session: Session) => {
+          const waiting = isWaiting(session);
+          const running = !waiting && session.state === "running";
+          const message = session.liveFacts?.message?.trim() ?? "";
+          // A finished row gone quiet for over half an hour steps back —
+          // the active few stand out of the long tail.
+          const now = Date.parse(snapshot.generatedAt);
+          const at = Date.parse(session.lastMessageAt ?? session.updatedAt);
+          const stale =
+            !waiting &&
+            !running &&
+            Number.isFinite(now) &&
+            Number.isFinite(at) &&
+            now - at > 30 * 60_000;
+          return (
+            <div
+              key={session.id}
               style={{
-                width: 6,
-                height: 6,
-                borderRadius: 999,
-                flex: "0 0 auto",
-                alignSelf: "center",
-                background: waiting
-                  ? colors.warning
-                  : running
-                    ? colors.ok
-                    : colors.tertiary,
-              }}
-            />
-            <span
-              title={session.title || session.id}
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                flexShrink: 0,
-                maxWidth: 180,
-                color: waiting ? colors.warningText : colors.text,
-                fontWeight: waiting ? 600 : 400,
+                display: "flex",
+                alignItems: "baseline",
+                gap: 8,
+                fontSize: 12,
+                lineHeight: "16px",
+                opacity: stale ? 0.45 : 1,
               }}
             >
-              {session.parentId ? "⑂ " : ""}
-              {session.title || session.id}
-            </span>
-            <span
-              title={message}
-              style={{
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                flex: 1,
-                minWidth: 32,
-                fontSize: 11,
-                color: colors.secondary,
-              }}
+              <span
+                aria-hidden
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  flex: "0 0 auto",
+                  alignSelf: "center",
+                  background: waiting
+                    ? colors.warning
+                    : running
+                      ? colors.ok
+                      : colors.tertiary,
+                }}
+              />
+              <span
+                title={session.title || session.id}
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                  maxWidth: 180,
+                  color: waiting ? colors.warningText : colors.text,
+                  fontWeight: waiting ? 600 : 400,
+                }}
+              >
+                {session.parentId ? "⑂ " : ""}
+                {session.title || session.id}
+              </span>
+              <span
+                title={message}
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  flex: 1,
+                  minWidth: 32,
+                  fontSize: 11,
+                  color: colors.secondary,
+                }}
+              >
+                {message}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontSize: 11,
+                  fontVariantNumeric: "tabular-nums",
+                  whiteSpace: "nowrap",
+                  color: colors.tertiary,
+                }}
+              >
+                {ago(session)}
+              </span>
+            </div>
+          );
+        };
+        // One group is no grouping: the board stays a plain list.
+        if (groups.length <= 1)
+          return (groups[0]?.sessions ?? []).map(row);
+        return groups.map((group) => {
+          const open = !folded[group.key];
+          const live = group.sessions.some(isWaiting)
+            ? colors.warning
+            : group.sessions.some((session) => session.state === "running")
+              ? colors.ok
+              : null;
+          const label =
+            group.key === REMOTE_OTHER_GROUP
+              ? zh
+                ? "其他"
+                : "Other"
+              : group.key;
+          return (
+            <div
+              key={group.key}
+              style={{ display: "grid", gap: "var(--hud-session-gap, 6px)" }}
             >
-              {message}
-            </span>
-            <span
-              style={{
-                flexShrink: 0,
-                fontSize: 11,
-                fontVariantNumeric: "tabular-nums",
-                whiteSpace: "nowrap",
-                color: colors.tertiary,
-              }}
-            >
-              {ago(session)}
-            </span>
-          </div>
-        );
-      })}
+              <button
+                type="button"
+                onClick={() =>
+                  setFolded((f) => ({ ...f, [group.key]: open }))
+                }
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  border: 0,
+                  padding: 0,
+                  background: "transparent",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                  color: colors.secondary,
+                }}
+              >
+                <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
+                  {open ? "▾" : "▸"}
+                </span>
+                {live && (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 5,
+                      height: 5,
+                      borderRadius: 999,
+                      flexShrink: 0,
+                      background: live,
+                    }}
+                  />
+                )}
+                <span>{label}</span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontWeight: 400,
+                    fontVariantNumeric: "tabular-nums",
+                    color: colors.tertiary,
+                  }}
+                >
+                  {group.sessions.length}
+                </span>
+              </button>
+              {open && group.sessions.map(row)}
+            </div>
+          );
+        });
+      })()}
     </div>
   );
 }
