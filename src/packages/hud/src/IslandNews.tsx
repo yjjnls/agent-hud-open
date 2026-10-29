@@ -29,24 +29,34 @@ export function useIslandNews(
   const items = snapshot.islandEvents?.items ?? [];
   const requestIDs = requests.map((request) => request.id).join("\0");
   useEffect(() => {
+    const firstRun = seen.current === null;
     const fresh =
-      seen.current === null
+      firstRun
         ? []
         : items.filter((event) => !seen.current!.has(event.id));
-    if (seen.current === null) seen.current = new Set();
-    for (const event of items) seen.current.add(event.id);
-    if (seen.current.size > 128)
-      seen.current = new Set(items.map((event) => event.id));
+    // Facts are consumed only by the screen the pointer is on. A background
+    // screen must not mark an event it never showed: the card would be lost
+    // once the user moves over there. Whichever screen the pointer comes to
+    // next replays what it missed — the first run still sets the baseline, so
+    // a window waking up never replays the whole backlog.
+    if (firstRun || underPointer) {
+      if (seen.current === null) seen.current = new Set();
+      for (const event of items) seen.current.add(event.id);
+      if (seen.current.size > 128)
+        seen.current = new Set(items.map((event) => event.id));
+    }
     const freshRequests =
       seenRequests.current === null
         ? requests
         : requests.filter((request) => !seenRequests.current!.has(request.id));
-    if (seenRequests.current === null) seenRequests.current = new Set();
-    const activeRequestIds = new Set(requests.map((request) => request.id));
-    for (const id of [...seenRequests.current]) {
-      if (!activeRequestIds.has(id)) seenRequests.current.delete(id);
+    if (firstRun || underPointer) {
+      if (seenRequests.current === null) seenRequests.current = new Set();
+      const activeRequestIds = new Set(requests.map((request) => request.id));
+      for (const id of [...seenRequests.current]) {
+        if (!activeRequestIds.has(id)) seenRequests.current.delete(id);
+      }
+      for (const request of requests) seenRequests.current.add(request.id);
     }
-    for (const request of requests) seenRequests.current.add(request.id);
     const visible =
       silenced || !underPointer
         ? []
@@ -67,7 +77,9 @@ export function useIslandNews(
           : previous,
         requests,
         visible,
-        underPointer ? freshRequests : [],
+        // Waiting requests are host-driven state, so every screen holds its
+        // own copy and the user can answer from whichever they are on.
+        freshRequests,
         inUsagePanel,
       ),
     );

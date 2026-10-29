@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     sync::OnceLock,
+    time::{Duration, Instant},
 };
 
 /// HUD_METRICS.expandedFlare: the open panel's flare on each side.
@@ -223,12 +224,18 @@ fn plan(
     }
 }
 
+/// How long an unchanged window plan may sit before its window is ordered
+/// again anyway.
+const RETOUCH_AFTER: Duration = Duration::from_secs(120);
+
 /// The connected screens and the plan each one's window was last given.
 #[derive(Default)]
 pub(crate) struct Planner {
     displays: Vec<Display>,
     measured: String,
     configured: HashMap<String, String>,
+    /// The last pass that re-ordered windows whose plan was unchanged.
+    retouched: Option<Instant>,
 }
 
 impl Planner {
@@ -294,6 +301,13 @@ impl Planner {
         now_ms: i64,
     ) {
         let visible = snapshot.is_none_or(|snapshot| snapshot["settings"]["hudVisible"] != false);
+        // The macOS window server occasionally stops compositing a status-level
+        // panel on a secondary display: occlusion still reports "visible" and
+        // the webview keeps painting, yet the pixels never reach the screen,
+        // and only a fresh order brings it back. So a window whose plan has sat
+        // unchanged for a while is asserted again regardless.
+        let retouch =
+            self.retouched.map_or(true, |at| at.elapsed() >= RETOUCH_AFTER);
         for display in &self.displays {
             let config = plan(display, view, snapshot, visible, now_ms);
             let id = display.info.screen_id.clone();
@@ -302,7 +316,7 @@ impl Planner {
             else {
                 continue;
             };
-            if self.configured.get(&id) == Some(&signature) {
+            if self.configured.get(&id) == Some(&signature) && !retouch {
                 continue;
             }
             match configure_display(app, config, display.clone()) {
@@ -311,6 +325,9 @@ impl Planner {
                 }
                 Err(error) => eprintln!("Agent HUD Next HUD window: {error}"),
             }
+        }
+        if retouch {
+            self.retouched = Some(Instant::now());
         }
     }
 }
