@@ -19,6 +19,7 @@ mod demo;
 pub mod extension;
 mod hud;
 mod instance;
+mod local_jobs;
 mod mcp_clients;
 mod remote;
 mod picture;
@@ -905,6 +906,7 @@ pub fn run_with_options(
             activity::window_activity,
             hud::hud_monitors,
             hud::hud_geometry,
+            local_jobs::local_jobs,
             hud::hud_native_capabilities,
             hud::hud_report_regions,
             hud::hud_drag_start,

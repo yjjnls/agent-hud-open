@@ -232,6 +232,7 @@ mod tests {
             flags("claude"),
             [
                 "--permission-hook",
+                "--completion-hook",
                 "--attention-hook",
                 "--compaction-hook",
                 "--session-origin-hook"

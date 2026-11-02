@@ -210,6 +210,9 @@ importers:
       '@agent-hud/ui':
         specifier: workspace:*
         version: link:../ui
+      '@tauri-apps/api':
+        specifier: 'catalog:'
+        version: 2.12.4
       lucide-react:
         specifier: 'catalog:'
         version: 1.59.0(@types/react@19.3.0)(react@19.3.1)

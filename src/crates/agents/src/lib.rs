@@ -84,6 +84,7 @@ pub const PERMISSION_SOURCES: &[&str] = &[
 /// The clients with a completion hook, from their descriptors (see the test).
 pub const COMPLETION_SOURCES: &[&str] = &[
     "antigravity",
+    "claude",
     "cursor",
     "copilot",
     "codebuddy",

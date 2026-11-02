@@ -27,7 +27,8 @@
     "@agent-hud/ui": "workspace:*",
     "lucide-react": "catalog:",
     "motion": "catalog:",
-    "shaders": "catalog:"
+    "shaders": "catalog:",
+    "@tauri-apps/api": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
