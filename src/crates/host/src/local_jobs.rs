@@ -39,6 +39,10 @@ pub fn local_jobs() -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(dir.join("jobs")) else {
         return rows;
     };
+    // A resumed session gets a fresh job directory, so one session can hold
+    // several: keep only each session's freshest job, or the list would show
+    // the finished run and the resumed wait as two rows.
+    let mut freshest: HashMap<String, (String, Value)> = HashMap::new();
     for entry in entries.flatten() {
         let Ok(bytes) = std::fs::read(entry.path().join("state.json")) else {
             continue;
@@ -49,6 +53,22 @@ pub fn local_jobs() -> Vec<Value> {
         let Some(session_id) = job["sessionId"].as_str().map(str::to_owned) else {
             continue;
         };
+        let stamp = job["updatedAt"]
+            .as_str()
+            .filter(|stamp| !stamp.is_empty())
+            .unwrap_or_default();
+        let entry_id = entry.file_name().to_string_lossy().into_owned();
+        match freshest.get(&session_id) {
+            Some((_, kept)) if kept["updatedAt"].as_str() >= Some(stamp) => {
+                continue;
+            }
+            _ => {
+                freshest.insert(session_id, (entry_id, job));
+            }
+        }
+    }
+    for (session_id, (job_id, job)) in freshest {
+        let entry_id = job_id;
         let state = job["state"].as_str().unwrap_or_default();
         let tempo = job["tempo"].as_str().unwrap_or_default();
         let live_row = live.get(&session_id);
@@ -85,7 +105,7 @@ pub fn local_jobs() -> Vec<Value> {
             .or_else(|| job["updatedAt"].as_str())
             .unwrap_or_default();
         rows.push(json!({
-            "id": entry.file_name().to_string_lossy(),
+            "id": entry_id,
             "sessionId": session_id,
             "name": name,
             "state": phase,
