@@ -38,6 +38,16 @@ export function CompletionAlertView({
     [failed, setFailed] = useState(false),
     [closeHover, setCloseHover] = useState(false);
   const session = snapshot.sessions.find((s) => s.id === event.sessionId);
+  // The conversation's own name, not "Claude": a subagent's card names the
+  // parent conversation it ran under, the way the panel's boards do.
+  const parentSession = session?.parentId
+    ? snapshot.sessions.find((s) => s.id.endsWith(session.parentId!))
+    : undefined;
+  const board =
+    parentSession?.title?.trim() ||
+    session?.title?.trim() ||
+    event.title ||
+    clientDisplayName(event.source);
   const hasSession = Boolean(
     session?.navigationTarget || event.navigationTarget,
   );
@@ -112,7 +122,7 @@ export function CompletionAlertView({
               whiteSpace: "nowrap",
             }}
           >
-            {clientDisplayName(event.source)}
+            {board}
           </strong>
           {event.model && event.model !== "Unknown" && (
             <span
@@ -155,20 +165,25 @@ export function CompletionAlertView({
         </button>
       </header>
       <div style={cardColumn(8)}>
-        <strong
-          style={{
-            fontSize: 15,
-            fontWeight: 500,
-            color: ink(0.95),
-            overflowWrap: "anywhere",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {event.title ?? newsTitle(event, zh)}
-        </strong>
+        {/* The board header already names the conversation; the title line
+            only earns its place when it says something else (a subagent's
+            own task prompt). */}
+        {(event.title ?? newsTitle(event, zh)) !== board && (
+          <strong
+            style={{
+              fontSize: 15,
+              fontWeight: 500,
+              color: ink(0.95),
+              overflowWrap: "anywhere",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {event.title ?? newsTitle(event, zh)}
+          </strong>
+        )}
         {message && (
           <p
             style={{
