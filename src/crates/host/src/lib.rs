@@ -20,6 +20,7 @@ pub mod extension;
 mod hud;
 mod instance;
 mod local_jobs;
+mod local_waits;
 mod mcp_clients;
 mod remote;
 mod picture;
@@ -245,7 +246,10 @@ impl Service {
             let hooks = hooks.lock().map_err(|_| "Hook service unavailable")?;
             hooks.requests()
         };
-        remote::spawn(remote_requests);
+        remote::spawn(remote_requests.clone());
+        // The local wait poller opens the same standing cards for this
+        // machine's own blocked jobs, off the same Requests handle.
+        local_waits::spawn(remote_requests.clone());
         let backend = Arc::new(Mutex::new(Backend {
             runtime,
             snapshot: None,

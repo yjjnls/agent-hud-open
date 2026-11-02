@@ -104,6 +104,11 @@ pub fn local_jobs() -> Vec<Value> {
             "sessionId": session_id,
             "name": name,
             "state": phase,
+            // The roster's own word for the phase (`blocked` = the turn is
+            // over and the user's turn now), unfettered by the live table's
+            // busy stamp, which freezes when a background turn ends — the
+            // wait poller needs the real signal, not the overlay's.
+            "rawState": state,
             "message": text,
             "stamp": stamp,
             "startedAt": job["createdAt"].as_str().unwrap_or_default(),
