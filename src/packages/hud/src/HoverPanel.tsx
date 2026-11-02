@@ -1130,10 +1130,10 @@ function PendingRequestsBoard({
 }
 
 /** This machine's own background claude jobs, a board of their own beside
- * the remote one — the same three-ledger rows and stats, its own fold and
- * detail cards, read straight from claude's tables on the panel's own
- * clock: the snapshot ticks with every provider, these tables only claude
- * writes. */
+ * the remote one — the same board-grade title and three-ledger stats, the
+ * same row and detail cards, read straight from claude's tables on the
+ * panel's own clock: the snapshot ticks with every provider, these tables
+ * only claude writes. */
 function LocalJobsBoard({
   snapshot,
   colors,
@@ -1183,24 +1183,6 @@ function LocalJobsBoard({
     agoStamp(snapshot.generatedAt, zh, iso);
   const when = (iso: string | null | undefined) =>
     whenStamp(snapshot.generatedAt, zh, iso);
-  // The fold survives the panel closing: webview localStorage, like the
-  // remote groups'.
-  const [folded, setFolded] = useState(() => {
-    try {
-      return localStorage.getItem("agent-hud.local-board.folded") === "1";
-    } catch {
-      return false;
-    }
-  });
-  const fold = (foldedNow: boolean) => {
-    setFolded(foldedNow);
-    try {
-      localStorage.setItem(
-        "agent-hud.local-board.folded",
-        foldedNow ? "1" : "0",
-      );
-    } catch {}
-  };
   // An open detail card is browsing, not a preference: it lives with the
   // panel and closes with it.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -1366,32 +1348,10 @@ function LocalJobsBoard({
         paddingBottom: "var(--hud-divided-gap)",
       }}
     >
-      <button
-        type="button"
-        onClick={() => fold(!folded)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          border: 0,
-          padding: 0,
-          background: "transparent",
-          cursor: "pointer",
-          textAlign: "left",
-          // Board-grade title, same size as the pending board's — this is a
-          // sibling of the remote board, not a footnote under it.
-          fontSize: 13,
-          fontWeight: 600,
-          color: colors.text,
-        }}
-      >
-        <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
-          {folded ? "▸" : "▾"}
-        </span>
-        <span aria-hidden style={{ flexShrink: 0, opacity: 0.75 }}>
-          ⌂
-        </span>
-        <span>{zh ? "本机会话" : "Local sessions"}</span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <strong style={{ fontSize: 13, fontWeight: 600, color: colors.text }}>
+          {zh ? "本机会话" : "Local sessions"}
+        </strong>
         <span
           style={{
             fontSize: 10,
@@ -1408,18 +1368,8 @@ function LocalJobsBoard({
             ? `${waitingCount} 等待 · ${runningCount} 运行 · ${doneCount} 完成`
             : `${waitingCount} waiting · ${runningCount} running · ${doneCount} done`}
         </span>
-        <span
-          style={{
-            marginLeft: "auto",
-            fontWeight: 400,
-            fontVariantNumeric: "tabular-nums",
-            color: colors.tertiary,
-          }}
-        >
-          {jobs.length}
-        </span>
-      </button>
-      {!folded && jobs.map(jobRow)}
+      </div>
+      {jobs.map(jobRow)}
     </div>
   );
 }
