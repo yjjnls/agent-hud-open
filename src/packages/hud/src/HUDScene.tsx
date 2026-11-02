@@ -382,7 +382,9 @@ export function HUDScene({
     pointerInside || typing,
     requests,
     vendors.map((v) => v.key),
-    glowHidden || Boolean(snapshot.status?.paused),
+    // A hidden glow silences the halo, not the news: completion cards still
+    // land. Only a paused snapshot quiets the queue.
+    Boolean(snapshot.status?.paused),
     underPointer,
     open && allowsInlineUsageAlert,
   );

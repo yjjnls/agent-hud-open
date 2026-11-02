@@ -70,7 +70,6 @@ pub fn local_jobs() -> Vec<Value> {
     for (session_id, (job_id, job)) in freshest {
         let entry_id = job_id;
         let state = job["state"].as_str().unwrap_or_default();
-        let tempo = job["tempo"].as_str().unwrap_or_default();
         let live_row = live.get(&session_id);
         let name = job["name"]
             .as_str()
@@ -78,20 +77,16 @@ pub fn local_jobs() -> Vec<Value> {
             .or_else(|| live_row.and_then(|row| row["name"].as_str()))
             .unwrap_or("claude");
         // claude's own list files jobs under Needs input / Working /
-        // Completed; the overlay's busy phase confirms a working one. A
-        // "working" job whose tempo has gone idle sits waiting for its
-        // prompt, not running.
-        let phase = match state {
-            "done" => "done",
-            "blocked" => "waiting",
-            "working" if tempo != "idle" => "running",
-            _ => {
-                if live_row.and_then(|row| row["status"].as_str()) == Some("busy") {
-                    "running"
-                } else {
-                    "waiting"
-                }
-            }
+        // Completed, and `claude agents --json` reads the same two tables we
+        // do: a live session's busy status is its Working, its idle is the
+        // wait, and the roster's done stays a finish even with a live
+        // process (a resumed wait reads done until its prompt runs).
+        let phase = if state == "done" {
+            "done"
+        } else if live_row.and_then(|row| row["status"].as_str()) == Some("busy") {
+            "running"
+        } else {
+            "waiting"
         };
         let text = job["detail"]
             .as_str()
