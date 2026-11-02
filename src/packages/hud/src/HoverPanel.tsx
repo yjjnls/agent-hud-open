@@ -585,6 +585,12 @@ function RemoteSessionsBoard({
       ),
     [snapshot.sessions],
   );
+  // This machine's own claude sessions share the snapshot with the remote
+  // ones; the board keeps them in a separate section so the two never blur.
+  const local = useMemo(
+    () => snapshot.sessions.filter((session) => session.source === "claude"),
+    [snapshot.sessions],
+  );
   const answered = useMemo(
     () =>
       new Set(
@@ -635,7 +641,7 @@ function RemoteSessionsBoard({
   const toggleRow = (id: string) =>
     setExpanded((e) => ({ ...e, [id]: !e[id] }));
   const zh = snapshotLanguage(snapshot) === "zh";
-  if (remote.length === 0) return null;
+  if (remote.length === 0 && local.length === 0) return null;
   const isWaiting = (session: Session) =>
     session.state === "waiting" || answered.has(session.id);
   // The remote list's own order: who waits first, then who runs, then the
@@ -724,7 +730,10 @@ function RemoteSessionsBoard({
         </span>
       </div>
       {(() => {
-        const row = (session: Session) => {
+        // `siblings` is the list the row's fork parent is looked up in: the
+        // remote rows resolve it among the remote sessions, the local ones
+        // among this machine's.
+        const row = (session: Session, siblings: Session[]) => {
           const waiting = isWaiting(session);
           const running = !waiting && session.state === "running";
           const message = session.liveFacts?.message?.trim() ?? "";
@@ -743,7 +752,7 @@ function RemoteSessionsBoard({
           // The fork parent sits in this same list; its id there carries the
           // source prefix this row's parentId drops.
           const parentTitle = session.parentId
-            ? (remote.find((item) => item.id.endsWith(session.parentId!))
+            ? (siblings.find((item) => item.id.endsWith(session.parentId!))
                 ?.title ?? null)
             : null;
           return (
@@ -897,9 +906,12 @@ function RemoteSessionsBoard({
           );
         };
         // One group is no grouping: the board stays a plain list.
-        if (groups.length <= 1)
-          return (groups[0]?.sessions ?? []).map(row);
-        return groups.map((group) => {
+        const remoteRows =
+          groups.length <= 1
+            ? (groups[0]?.sessions ?? []).map((session) =>
+                row(session, remote),
+              )
+            : groups.map((group) => {
           const open = !folded[group.key];
           const live = group.sessions.some(isWaiting)
             ? colors.warning
@@ -962,10 +974,65 @@ function RemoteSessionsBoard({
                   {group.sessions.length}
                 </span>
               </button>
-              {open && group.sessions.map(row)}
+              {open &&
+                group.sessions.map((session) => row(session, remote))}
             </div>
           );
         });
+        return (
+          <>
+            {remoteRows}
+            {local.length > 0 && (
+              <div
+                data-hud-section="local-sessions"
+                style={{ display: "grid", gap: "var(--hud-session-gap, 6px)" }}
+              >
+                <button
+                  type="button"
+                  onClick={() => fold("local", !folded.local)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    border: 0,
+                    padding: 0,
+                    background: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    fontSize: 12.5,
+                    fontWeight: 650,
+                    letterSpacing: "0.02em",
+                    // White against the remote groups' orange: this machine's
+                    // own sessions read as a different ledger at a glance.
+                    color: colors.text,
+                  }}
+                >
+                  <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
+                    {folded.local ? "▸" : "▾"}
+                  </span>
+                  <span aria-hidden style={{ flexShrink: 0, opacity: 0.75 }}>
+                    ⌂
+                  </span>
+                  <span>{zh ? "本机" : "Local"}</span>
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      fontWeight: 400,
+                      fontVariantNumeric: "tabular-nums",
+                      color: colors.tertiary,
+                    }}
+                  >
+                    {local.length}
+                  </span>
+                </button>
+                {!folded.local &&
+                  [...local]
+                    .sort((a, b) => rank(a) - rank(b) || fresh(a, b))
+                    .map((session) => row(session, local))}
+              </div>
+            )}
+          </>
+        );
       })()}
     </div>
   );
