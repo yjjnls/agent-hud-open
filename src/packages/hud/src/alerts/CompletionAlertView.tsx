@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ArrowUpRight,
   ChartNoAxesColumn,
+  Check,
   MessageSquareText,
   RotateCcw,
   X,
@@ -220,6 +221,28 @@ export function CompletionAlertView({
           )
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button
+            type="button"
+            onClick={dismiss}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              height: 22,
+              padding: "0 9px",
+              borderRadius: 6,
+              border: `1px solid ${ink(0.18)}`,
+              background: "transparent",
+              color: ink(0.6),
+              fontSize: 11,
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+              cursor: "pointer",
+            }}
+          >
+            <Check size={9} strokeWidth={2.6} />
+            {zh ? "我知道了" : "Got it"}
+          </button>
           <button
             type="button"
             onClick={openUsage}
