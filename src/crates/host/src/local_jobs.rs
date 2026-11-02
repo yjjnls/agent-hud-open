@@ -50,6 +50,7 @@ pub fn local_jobs() -> Vec<Value> {
             continue;
         };
         let state = job["state"].as_str().unwrap_or_default();
+        let tempo = job["tempo"].as_str().unwrap_or_default();
         let live_row = live.get(&session_id);
         let name = job["name"]
             .as_str()
@@ -57,11 +58,13 @@ pub fn local_jobs() -> Vec<Value> {
             .or_else(|| live_row.and_then(|row| row["name"].as_str()))
             .unwrap_or("claude");
         // claude's own list files jobs under Needs input / Working /
-        // Completed; the overlay's busy phase confirms a working one.
+        // Completed; the overlay's busy phase confirms a working one. A
+        // "working" job whose tempo has gone idle sits waiting for its
+        // prompt, not running.
         let phase = match state {
             "done" => "done",
             "blocked" => "waiting",
-            "working" => "running",
+            "working" if tempo != "idle" => "running",
             _ => {
                 if live_row.and_then(|row| row["status"].as_str()) == Some("busy") {
                     "running"
