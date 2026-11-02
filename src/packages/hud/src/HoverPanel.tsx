@@ -357,6 +357,7 @@ export const SourceHoverPanel = memo(function SourceHoverPanel({
             colors={colors}
             config={config}
           />
+          <LocalJobsBoard snapshot={snapshot} colors={colors} />
           <PendingRequestsBoard
             snapshot={snapshot}
             light={light}
@@ -570,6 +571,42 @@ type DraftState = NonNullable<
  * style, a style alone, or the app's settings alone. */
 /** The remote sessions at a glance: who runs, who idles, and who waits for
  * an answer — the wait a waiting card on the island carries. */
+/** A bare "2m/3h/9d", the style claude's own list prints next to a name. */
+function agoStamp(
+  generatedAt: string,
+  zh: boolean,
+  iso: string | null | undefined,
+) {
+  const now = Date.parse(generatedAt);
+  const at = Date.parse(iso ?? "");
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return "";
+  return age(Math.max(0, (now - at) / 1000), zh ? "zh" : "en")
+    .replace(" ago", "")
+    .replace(" 前", "");
+}
+
+/** An absolute stamp for a detail card: today reads as a clock time, and
+ * anything older keeps its date. */
+function whenStamp(
+  generatedAt: string,
+  zh: boolean,
+  iso: string | null | undefined,
+) {
+  if (!iso) return "";
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return "";
+  const atDate = new Date(at);
+  const clock = `${String(atDate.getHours()).padStart(2, "0")}:${String(atDate.getMinutes()).padStart(2, "0")}`;
+  const now = Date.parse(generatedAt) || Date.now();
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  if (at >= midnight.getTime())
+    return clock;
+  if (at >= midnight.getTime() - 86_400_000)
+    return zh ? `昨天 ${clock}` : `yesterday ${clock}`;
+  return `${atDate.getMonth() + 1}/${atDate.getDate()} ${clock}`;
+}
+
 function RemoteSessionsBoard({
   snapshot,
   colors,
@@ -586,47 +623,6 @@ function RemoteSessionsBoard({
       ),
     [snapshot.sessions],
   );
-  // This machine's own background jobs, read straight from claude's tables —
-  // the roster that survives the process, not the transcript history. Pulled
-  // on its own clock: the snapshot ticks with every provider, these tables
-  // only claude writes.
-  const [localJobs, setLocalJobs] = useState<
-    {
-      id: string;
-      name: string;
-      state: string;
-      message: string;
-      stamp: string;
-      startedAt: string;
-      cwd: string;
-    }[]
-  >([]);
-  useEffect(() => {
-    let disposed = false;
-    const pull = () => {
-      void invoke<
-        {
-          id: string;
-          name: string;
-          state: string;
-          message: string;
-          stamp: string;
-          startedAt: string;
-          cwd: string;
-        }[]
-      >("local_jobs")
-        .then((rows) => {
-          if (!disposed) setLocalJobs(rows ?? []);
-        })
-        .catch(() => {});
-    };
-    pull();
-    const timer = setInterval(pull, 30_000);
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-    };
-  }, []);
   const answered = useMemo(
     () =>
       new Set(
@@ -677,7 +673,7 @@ function RemoteSessionsBoard({
   const toggleRow = (id: string) =>
     setExpanded((e) => ({ ...e, [id]: !e[id] }));
   const zh = snapshotLanguage(snapshot) === "zh";
-  if (remote.length === 0 && localJobs.length === 0) return null;
+  if (remote.length === 0) return null;
   const isWaiting = (session: Session) =>
     session.state === "waiting" || answered.has(session.id);
   // The remote list's own order: who waits first, then who runs, then the
@@ -692,34 +688,12 @@ function RemoteSessionsBoard({
   const runningCount = ordered.filter(
     (session) => !isWaiting(session) && session.state === "running",
   ).length;
-  // A bare "2m/3h/9d", the style claude's own list prints next to a name.
-  const agoOf = (iso: string | null | undefined) => {
-    const now = Date.parse(snapshot.generatedAt);
-    const at = Date.parse(iso ?? "");
-    if (!Number.isFinite(at) || !Number.isFinite(now)) return "";
-    return age(Math.max(0, (now - at) / 1000), zh ? "zh" : "en")
-      .replace(" ago", "")
-      .replace(" 前", "");
-  };
+  const agoOf = (iso: string | null | undefined) =>
+    agoStamp(snapshot.generatedAt, zh, iso);
   const ago = (session: Session) =>
     agoOf(session.lastMessageAt ?? session.updatedAt);
-  // An absolute stamp for the detail card: today reads as a clock time, and
-  // anything older keeps its date.
-  const when = (iso: string | null | undefined) => {
-    if (!iso) return "";
-    const at = Date.parse(iso);
-    if (!Number.isFinite(at)) return "";
-    const atDate = new Date(at);
-    const clock = `${String(atDate.getHours()).padStart(2, "0")}:${String(atDate.getMinutes()).padStart(2, "0")}`;
-    const now = Date.parse(snapshot.generatedAt) || Date.now();
-    const midnight = new Date(now);
-    midnight.setHours(0, 0, 0, 0);
-    if (at >= midnight.getTime())
-      return clock;
-    if (at >= midnight.getTime() - 86_400_000)
-      return zh ? `昨天 ${clock}` : `yesterday ${clock}`;
-    return `${atDate.getMonth() + 1}/${atDate.getDate()} ${clock}`;
-  };
+  const when = (iso: string | null | undefined) =>
+    whenStamp(snapshot.generatedAt, zh, iso);
   // How long a turn ran, or has been running.
   const span = (fromIso: string | null, toIso: string | null, live: boolean) => {
     const from = fromIso ? Date.parse(fromIso) : NaN;
@@ -1020,242 +994,6 @@ function RemoteSessionsBoard({
         return (
           <>
             {remoteRows}
-            {localJobs.length > 0 && (
-              <div
-                data-hud-section="local-sessions"
-                style={{ display: "grid", gap: "var(--hud-session-gap, 6px)" }}
-              >
-                {(() => {
-                  // claude's own ledger: waits, then the working, then the
-                  // finished — the host returns them already in that order.
-                  const localWaiting = localJobs.filter(
-                    (job) => job.state === "waiting",
-                  ).length;
-                  const localRunning = localJobs.filter(
-                    (job) => job.state === "running",
-                  ).length;
-                  const localDone =
-                    localJobs.length - localWaiting - localRunning;
-                  const jobRow = (job: (typeof localJobs)[number]) => {
-                    const waiting = job.state === "waiting";
-                    const running = !waiting && job.state === "running";
-                    const key = `local:${job.id}`;
-                    const open = Boolean(expanded[key]);
-                    const message = job.message?.trim() ?? "";
-                    return (
-                      <div key={job.id} style={{ display: "grid" }}>
-                        <div
-                          onClick={() => toggleRow(key)}
-                          style={{
-                            display: "flex",
-                            alignItems: "baseline",
-                            gap: 8,
-                            fontSize: 12,
-                            lineHeight: "16px",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <span
-                            aria-hidden
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: 999,
-                              flex: "0 0 auto",
-                              alignSelf: "center",
-                              background: waiting
-                                ? colors.warning
-                                : running
-                                  ? colors.ok
-                                  : colors.tertiary,
-                            }}
-                          />
-                          <span
-                            title={job.name}
-                            style={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              flexShrink: 0,
-                              maxWidth: 180,
-                              color: waiting
-                                ? colors.warningText
-                                : colors.text,
-                              fontWeight: waiting ? 600 : 400,
-                            }}
-                          >
-                            {job.name}
-                          </span>
-                          <span
-                            title={message}
-                            style={{
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              flex: 1,
-                              minWidth: 32,
-                              fontSize: 11,
-                              color: colors.secondary,
-                            }}
-                          >
-                            {message}
-                          </span>
-                          <span
-                            style={{
-                              flexShrink: 0,
-                              fontSize: 11,
-                              fontVariantNumeric: "tabular-nums",
-                              whiteSpace: "nowrap",
-                              color: colors.tertiary,
-                            }}
-                          >
-                            {agoOf(job.stamp)}
-                          </span>
-                        </div>
-                        {open && (
-                          <div
-                            style={{
-                              margin: "3px 0 4px 20px",
-                              padding: "8px 10px",
-                              borderRadius: 8,
-                              background: "rgba(128, 128, 128, 0.08)",
-                              display: "grid",
-                              gap: 5,
-                              fontSize: 11,
-                              lineHeight: "15px",
-                              color: colors.secondary,
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 10,
-                                alignItems: "baseline",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  fontWeight: 650,
-                                  color: waiting
-                                    ? colors.warningText
-                                    : running
-                                      ? colors.okText
-                                      : colors.secondary,
-                                }}
-                              >
-                                {waiting
-                                  ? zh
-                                    ? "等待输入"
-                                    : "waiting"
-                                  : running
-                                    ? zh
-                                      ? "运行中"
-                                      : "running"
-                                    : zh
-                                      ? "已完成"
-                                      : "done"}
-                              </span>
-                              {job.startedAt && (
-                                <span
-                                  style={{ fontVariantNumeric: "tabular-nums" }}
-                                >
-                                  {zh ? "开始于" : "started"}{" "}
-                                  {when(job.startedAt)}
-                                </span>
-                              )}
-                            </div>
-                            <div style={{ fontVariantNumeric: "tabular-nums" }}>
-                              {zh ? "最后活动" : "last activity"}{" "}
-                              {when(job.stamp)}
-                              {job.cwd ? ` · ${job.cwd}` : ""}
-                            </div>
-                            {message && (
-                              <div
-                                style={{
-                                  whiteSpace: "pre-wrap",
-                                  color: colors.text,
-                                  fontSize: 12,
-                                  lineHeight: "17px",
-                                }}
-                              >
-                                {message}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  };
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => fold("local", !folded.local)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                          border: 0,
-                          padding: 0,
-                          background: "transparent",
-                          cursor: "pointer",
-                          textAlign: "left",
-                          fontSize: 12.5,
-                          fontWeight: 650,
-                          letterSpacing: "0.02em",
-                          // White against the remote groups' orange: this
-                          // machine's own jobs read as a different ledger.
-                          color: colors.text,
-                        }}
-                      >
-                        <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
-                          {folded.local ? "▸" : "▾"}
-                        </span>
-                        <span
-                          aria-hidden
-                          style={{ flexShrink: 0, opacity: 0.75 }}
-                        >
-                          ⌂
-                        </span>
-                        <span>{zh ? "本机" : "Local"}</span>
-                        <span
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 600,
-                            fontVariantNumeric: "tabular-nums",
-                            padding: "2px 6px",
-                            borderRadius: 999,
-                            color:
-                              localWaiting > 0
-                                ? colors.warningText
-                                : colors.secondary,
-                            background:
-                              localWaiting > 0
-                                ? "rgba(233, 161, 109, 0.16)"
-                                : "transparent",
-                          }}
-                        >
-                          {zh
-                            ? `${localWaiting} 等待 · ${localRunning} 运行 · ${localDone} 完成`
-                            : `${localWaiting} waiting · ${localRunning} running · ${localDone} done`}
-                        </span>
-                        <span
-                          style={{
-                            marginLeft: "auto",
-                            fontWeight: 400,
-                            fontVariantNumeric: "tabular-nums",
-                            color: colors.tertiary,
-                          }}
-                        >
-                          {localJobs.length}
-                        </span>
-                      </button>
-                      {!folded.local && localJobs.map(jobRow)}
-                    </>
-                  );
-                })()}
-              </div>
-            )}
           </>
         );
       })()}
@@ -1387,6 +1125,301 @@ function PendingRequestsBoard({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** This machine's own background claude jobs, a board of their own beside
+ * the remote one — the same three-ledger rows and stats, its own fold and
+ * detail cards, read straight from claude's tables on the panel's own
+ * clock: the snapshot ticks with every provider, these tables only claude
+ * writes. */
+function LocalJobsBoard({
+  snapshot,
+  colors,
+}: {
+  snapshot: Snapshot;
+  colors: ReturnType<typeof palette>;
+}) {
+  const [jobs, setJobs] = useState<
+    {
+      id: string;
+      name: string;
+      state: string;
+      message: string;
+      stamp: string;
+      startedAt: string;
+      cwd: string;
+    }[]
+  >([]);
+  useEffect(() => {
+    let disposed = false;
+    const pull = () => {
+      void invoke<
+        {
+          id: string;
+          name: string;
+          state: string;
+          message: string;
+          stamp: string;
+          startedAt: string;
+          cwd: string;
+        }[]
+      >("local_jobs")
+        .then((rows) => {
+          if (!disposed) setJobs(rows ?? []);
+        })
+        .catch(() => {});
+    };
+    pull();
+    const timer = setInterval(pull, 30_000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, []);
+  const zh = snapshotLanguage(snapshot) === "zh";
+  const agoOf = (iso: string | null | undefined) =>
+    agoStamp(snapshot.generatedAt, zh, iso);
+  const when = (iso: string | null | undefined) =>
+    whenStamp(snapshot.generatedAt, zh, iso);
+  // The fold survives the panel closing: webview localStorage, like the
+  // remote groups'.
+  const [folded, setFolded] = useState(() => {
+    try {
+      return localStorage.getItem("agent-hud.local-board.folded") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const fold = (foldedNow: boolean) => {
+    setFolded(foldedNow);
+    try {
+      localStorage.setItem(
+        "agent-hud.local-board.folded",
+        foldedNow ? "1" : "0",
+      );
+    } catch {}
+  };
+  // An open detail card is browsing, not a preference: it lives with the
+  // panel and closes with it.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleRow = (id: string) =>
+    setExpanded((e) => ({ ...e, [id]: !e[id] }));
+  if (jobs.length === 0) return null;
+  // claude's own ledger: waits, then the working, then the finished — the
+  // host returns them already in that order.
+  const waitingCount = jobs.filter((job) => job.state === "waiting").length;
+  const runningCount = jobs.filter((job) => job.state === "running").length;
+  const doneCount = jobs.length - waitingCount - runningCount;
+  const jobRow = (job: (typeof jobs)[number]) => {
+    const waiting = job.state === "waiting";
+    const running = !waiting && job.state === "running";
+    const key = `local:${job.id}`;
+    const open = Boolean(expanded[key]);
+    const message = job.message?.trim() ?? "";
+    return (
+      <div key={job.id} style={{ display: "grid" }}>
+        <div
+          onClick={() => toggleRow(key)}
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 8,
+            fontSize: 12,
+            lineHeight: "16px",
+            cursor: "pointer",
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: 999,
+              flex: "0 0 auto",
+              alignSelf: "center",
+              background: waiting
+                ? colors.warning
+                : running
+                  ? colors.ok
+                  : colors.tertiary,
+            }}
+          />
+          <span
+            title={job.name}
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+              maxWidth: 180,
+              color: waiting ? colors.warningText : colors.text,
+              fontWeight: waiting ? 600 : 400,
+            }}
+          >
+            {job.name}
+          </span>
+          <span
+            title={message}
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: 1,
+              minWidth: 32,
+              fontSize: 11,
+              color: colors.secondary,
+            }}
+          >
+            {message}
+          </span>
+          <span
+            style={{
+              flexShrink: 0,
+              fontSize: 11,
+              fontVariantNumeric: "tabular-nums",
+              whiteSpace: "nowrap",
+              color: colors.tertiary,
+            }}
+          >
+            {agoOf(job.stamp)}
+          </span>
+        </div>
+        {open && (
+          <div
+            style={{
+              margin: "3px 0 4px 20px",
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "rgba(128, 128, 128, 0.08)",
+              display: "grid",
+              gap: 5,
+              fontSize: 11,
+              lineHeight: "15px",
+              color: colors.secondary,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "baseline",
+              }}
+            >
+              <span
+                style={{
+                  fontWeight: 650,
+                  color: waiting
+                    ? colors.warningText
+                    : running
+                      ? colors.okText
+                      : colors.secondary,
+                }}
+              >
+                {waiting
+                  ? zh
+                    ? "等待输入"
+                    : "waiting"
+                  : running
+                    ? zh
+                      ? "运行中"
+                      : "running"
+                    : zh
+                      ? "已完成"
+                      : "done"}
+              </span>
+              {job.startedAt && (
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {zh ? "开始于" : "started"} {when(job.startedAt)}
+                </span>
+              )}
+            </div>
+            <div style={{ fontVariantNumeric: "tabular-nums" }}>
+              {zh ? "最后活动" : "last activity"} {when(job.stamp)}
+              {job.cwd ? ` · ${job.cwd}` : ""}
+            </div>
+            {message && (
+              <div
+                style={{
+                  whiteSpace: "pre-wrap",
+                  color: colors.text,
+                  fontSize: 12,
+                  lineHeight: "17px",
+                }}
+              >
+                {message}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <div
+      data-hud-section="local-sessions"
+      style={{
+        display: "grid",
+        gap: "var(--hud-session-gap, 6px)",
+        boxShadow: `inset 0 -1px 0 ${colors.divider}`,
+        paddingBottom: "var(--hud-divided-gap)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => fold(!folded)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          border: 0,
+          padding: 0,
+          background: "transparent",
+          cursor: "pointer",
+          textAlign: "left",
+          // Board-grade title, same size as the pending board's — this is a
+          // sibling of the remote board, not a footnote under it.
+          fontSize: 13,
+          fontWeight: 600,
+          color: colors.text,
+        }}
+      >
+        <span aria-hidden style={{ width: 8, flexShrink: 0 }}>
+          {folded ? "▸" : "▾"}
+        </span>
+        <span aria-hidden style={{ flexShrink: 0, opacity: 0.75 }}>
+          ⌂
+        </span>
+        <span>{zh ? "本机会话" : "Local sessions"}</span>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+            padding: "2px 6px",
+            borderRadius: 999,
+            color: waitingCount > 0 ? colors.warningText : colors.secondary,
+            background:
+              waitingCount > 0 ? "rgba(233, 161, 109, 0.16)" : "transparent",
+          }}
+        >
+          {zh
+            ? `${waitingCount} 等待 · ${runningCount} 运行 · ${doneCount} 完成`
+            : `${waitingCount} waiting · ${runningCount} running · ${doneCount} done`}
+        </span>
+        <span
+          style={{
+            marginLeft: "auto",
+            fontWeight: 400,
+            fontVariantNumeric: "tabular-nums",
+            color: colors.tertiary,
+          }}
+        >
+          {jobs.length}
+        </span>
+      </button>
+      {!folded && jobs.map(jobRow)}
     </div>
   );
 }
