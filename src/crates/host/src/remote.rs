@@ -31,6 +31,13 @@ const SOURCE: &str = "claude-remote";
 /// this and the session finished while we were away, so the card would
 /// only replay history on every launch.
 const FRESH_COMPLETION: i64 = 2 * 60_000;
+// A finished turn only raises its card after this much silence. A pause
+// shorter than the window is a round-trip inside one task (the model turned,
+// the user replied in the remote terminal, the next call started) — raising
+// a card for every such pause turned one task's finish into a string of
+// notices. Waits (permission asks) skip the window entirely: they are the
+// reminder to go answer, not a completion notice.
+const DONE_QUIET_WINDOW_MS: i64 = 90_000;
 
 /// Starts the poller. `requests` holds the island's waiting cards this
 /// poller opens for a remote input wait, and closes when the session
@@ -91,6 +98,9 @@ fn run(host: String, requests: Requests) {
     // frozen at the finish. Each finished turn raises a lasting card, like
     // a wait does — one per session, replaced when a new turn finishes.
     let mut dones: HashMap<String, i64> = HashMap::new();
+    // Finishes holding out their quiet window: the flip was seen, the card
+    // waits for the pause to prove real.
+    let mut pending_dones: HashMap<String, PendingDone> = HashMap::new();
     // A failed read is quiet — the remote may be asleep — but its first
     // appearance is worth one line, as is its clearing.
     let mut failing = false;
@@ -218,27 +228,18 @@ fn run(host: String, requests: Requests) {
                 }
             }
             // A turn finished: the table itself tells it — busy last pass,
-            // done now, no wait standing. Only a fresh finish raises a
-            // card, so a launch never replays finished history.
-            for (sid, row) in &seen {
-                if row.status == "busy" || waits.contains_key(sid) {
-                    continue;
+            // done now, no wait standing. But a finish must hold quiet for
+            // DONE_QUIET_WINDOW_MS before its card goes up: the table's
+            // idle flickers between the turns of a churning run, and each
+            // flicker used to raise its own card. Waits skip the window —
+            // a question wants an answer now, not in ninety seconds.
+            for RaisedDone { sid, stamp, title, cancel_old } in
+                advance_dones(&seen, &live, &waits, &mut dones, &mut pending_dones, now)
+            {
+                if let Some(old) = cancel_old {
+                    requests.cancel(&done_id(&sid, old));
                 }
-                if dones.get(sid) == Some(&row.stamp) || now - row.stamp > FRESH_COMPLETION {
-                    continue;
-                }
-                if !live.get(sid).is_some_and(|old| old.status == "busy") {
-                    continue;
-                }
-                let previous = dones.insert(sid.clone(), row.stamp);
-                if let Some(old) = previous.filter(|old| *old != row.stamp) {
-                    requests.cancel(&done_id(sid, old));
-                }
-                requests.register_native(
-                    done_id(sid, row.stamp),
-                    done_card(sid, &row.name, now),
-                    now,
-                );
+                requests.register_native(done_id(&sid, stamp), done_card(&sid, &title, now), now);
             }
             // Turn snapshots: every live session is reported each round, so
             // the HUD's own two-minute quiet rule never ends a working one.
@@ -468,6 +469,85 @@ fn done_id(sid: &str, stamp: i64) -> String {
     format!("{SOURCE}-done:{sid}:{stamp}")
 }
 
+/// A finished turn waiting out its quiet window before the card goes up.
+/// `stamp` is the finish it will announce; if the session moves again
+/// (a different stamp), the wait is dropped instead.
+struct PendingDone {
+    stamp: i64,
+    since: i64,
+    title: String,
+}
+
+/// A finish the quiet window confirmed: the caller registers the card and
+/// cancels `cancel_old` (a previous finish's card for the same session).
+struct RaisedDone {
+    sid: String,
+    stamp: i64,
+    title: String,
+    cancel_old: Option<i64>,
+}
+
+/// One round of the done-card quiet window over the seen table. Returns the
+/// cards to raise now. Mutates `dones` (the raised-finish memory) and
+/// `pending` (the window state).
+fn advance_dones(
+    seen: &HashMap<String, Row>,
+    live: &HashMap<String, Row>,
+    waits: &HashMap<String, Wait>,
+    dones: &mut HashMap<String, i64>,
+    pending: &mut HashMap<String, PendingDone>,
+    now: i64,
+) -> Vec<RaisedDone> {
+    // A session gone from the table is the user's own cleanup — drop any
+    // window it had open instead of announcing a finish nobody saw.
+    pending.retain(|sid, _| seen.contains_key(sid));
+    let mut raised = Vec::new();
+    for (sid, row) in seen {
+        if row.status == "busy" || waits.contains_key(sid) {
+            // Back at work, or asking for input: nothing finished here.
+            pending.remove(sid);
+            continue;
+        }
+        match pending.get(sid) {
+            Some(p) if p.stamp != row.stamp => {
+                // The table moved while quiet — the "finish" is not holding.
+                pending.remove(sid);
+            }
+            Some(p) if now - p.since >= DONE_QUIET_WINDOW_MS => {
+                let stamp = p.stamp;
+                let title = p.title.clone();
+                pending.remove(sid);
+                let previous = dones.insert(sid.clone(), stamp);
+                raised.push(RaisedDone {
+                    sid: sid.clone(),
+                    stamp,
+                    title,
+                    cancel_old: previous.filter(|old| *old != stamp),
+                });
+            }
+            Some(_) => {}
+            None => {
+                // A fresh flip from busy is the only entry: history idles
+                // (a launch, an already-raised finish) never open a window.
+                if dones.get(sid) != Some(&row.stamp)
+                    && now - row.stamp <= FRESH_COMPLETION
+                    && live.get(sid).is_some_and(|old| old.status == "busy")
+                {
+                    pending.insert(
+                        sid.clone(),
+                        PendingDone {
+                            stamp: row.stamp,
+                            since: now,
+                            title: row.name.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    raised
+}
+
 /// The card a just-finished remote turn shows: the session's own name (the
 /// question's header tag), the news, and a note that nothing is being asked
 /// here. No answer buttons — it is a notice that stays until the session
@@ -644,5 +724,167 @@ mod tests {
         assert_eq!(question["header"], "sandbox1-gpu");
         assert!(!question["question"].as_str().unwrap().is_empty());
         assert!(!card["answerNote"].as_str().unwrap().is_empty());
+    }
+
+    fn row(status: &str, stamp: i64) -> Row {
+        Row {
+            status: status.into(),
+            name: "sandbox1-gpu".into(),
+            stamp,
+            started: 1,
+            cwd: "/srv".into(),
+            message: String::new(),
+            parent: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_finish_waits_out_its_quiet_window_before_the_card_goes_up() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 2000));
+        let waits = HashMap::new();
+        // The flip opens a window; nothing rises yet.
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        // A second of quiet left: still nothing.
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 189_999).is_empty());
+        // Quiet holds to the full window: one card, for the held stamp.
+        let raised = advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_000);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].sid, sid);
+        assert_eq!(raised[0].stamp, 2000);
+        assert_eq!(raised[0].cancel_old, None);
+        // Raised already: the same finish never rises twice.
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_001).is_empty());
+    }
+
+    #[test]
+    fn a_finish_that_goes_back_to_busy_never_raises_its_card() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 2000));
+        let waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        // Back at work mid-window: the window closes.
+        *seen.get_mut(&sid).unwrap() = row("busy", 2000);
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_001).is_empty());
+        assert!(!pending.contains_key(&sid));
+        // The same finish still standing idle later: the window re-opens,
+        // and its clock restarts — the hold has to be quiet to count.
+        *seen.get_mut(&sid).unwrap() = row("idle", 2000);
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_002).is_empty());
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 189_002).is_empty());
+        let raised = advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_002);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].stamp, 2000);
+    }
+
+    #[test]
+    fn a_finish_that_starts_waiting_never_raises_its_card() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 2000));
+        let mut waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        // A wait stands up mid-window: the question card goes out at once,
+        // and the finish behind it is dropped, not queued behind the answer.
+        waits.insert(
+            sid.clone(),
+            Wait { stamp: 2000, title: "sandbox1-gpu".into(), message: String::new() },
+        );
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_001).is_empty());
+        assert!(!pending.contains_key(&sid));
+    }
+
+    #[test]
+    fn a_finish_that_moves_stamp_while_quiet_is_dropped() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 99_000));
+        let waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        // The stamp moves while quiet (the job file's heartbeat writes
+        // again): the old hold is not standing, and the round that drops it
+        // does not open a new one — that is next round's call.
+        *seen.get_mut(&sid).unwrap() = row("idle", 100_000);
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_001).is_empty());
+        // The heartbeat stops: the newer stamp is still fresh, so it holds
+        // from its own round — and the card names it, not the dropped one.
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_002).is_empty());
+        let raised = advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_002);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].stamp, 100_000);
+    }
+
+    #[test]
+    fn history_idles_never_open_a_window() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        // Last pass was already idle — a launch, or a finish already raised.
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("idle", 2000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 2000));
+        let waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_stale_finish_never_opens_a_window() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        // The finish is four minutes old: too old to announce.
+        seen.insert(sid.clone(), row("idle", 100_000 - 4 * 60_000));
+        let waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn a_second_finish_cancels_the_first_card() {
+        let sid = "8c03067d-1234".to_string();
+        let mut dones = HashMap::new();
+        let mut pending = HashMap::new();
+        let mut live = HashMap::new();
+        live.insert(sid.clone(), row("busy", 1000));
+        let mut seen = HashMap::new();
+        seen.insert(sid.clone(), row("idle", 99_000));
+        let waits = HashMap::new();
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 100_000).is_empty());
+        let raised = advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_000);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].cancel_old, None);
+        // Back to work, then a second finish (its stamp is its own moment):
+        // its card replaces the first.
+        *seen.get_mut(&sid).unwrap() = row("busy", 99_000);
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_001).is_empty());
+        *seen.get_mut(&sid).unwrap() = row("idle", 190_001);
+        assert!(advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 190_002).is_empty());
+        let raised = advance_dones(&seen, &live, &waits, &mut dones, &mut pending, 280_002);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].stamp, 190_001);
+        assert_eq!(raised[0].cancel_old, Some(99_000));
     }
 }
