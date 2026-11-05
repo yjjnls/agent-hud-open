@@ -122,7 +122,13 @@ impl Requests {
             if state.dismissed.contains(&id) || state.pending.iter().any(|p| p.id == id) {
                 return None;
             }
-            let deadline_ms = now_ms.saturating_add(state.hold_ms as i64);
+            // A card marked persistent never ages out — its source owns its
+            // lifetime (a newer finished turn cancels it, the user closes it).
+            let deadline_ms = if view["persistent"] == Value::Bool(true) {
+                i64::MAX
+            } else {
+                now_ms.saturating_add(state.hold_ms as i64)
+            };
             view["id"] = Value::String(id.clone());
             state.pending.push_back(Pending {
                 id: id.clone(),
@@ -306,7 +312,13 @@ impl Requests {
             } else {
                 state.hold_ms = hold_ms;
                 for item in &mut state.pending {
-                    item.deadline_ms = item.created_ms.saturating_add(hold_ms as i64);
+                    // Persistent cards keep their endless deadline — the hold
+                    // was never their lifetime to begin with.
+                    let persistent = matches!(&item.content, Content::Native(view)
+                        if view["persistent"] == Value::Bool(true));
+                    if !persistent {
+                        item.deadline_ms = item.created_ms.saturating_add(hold_ms as i64);
+                    }
                 }
                 true
             }
@@ -633,4 +645,35 @@ fn validate_native_answers(view: &Value, decision: &Value) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_persistent_card_outlives_the_hold_but_yields_to_cancel() {
+        let requests = Requests::default();
+        let card = serde_json::json!({"title": "t", "persistent": true});
+        requests.register_native("done-1".into(), card, 1000);
+        // Well past the default ten-minute hold: the notice stays.
+        requests.expire(1000 + 600_000 + 1);
+        assert_eq!(requests.views(1_000_000_000).len(), 1);
+        // A hold change does not hand it a deadline either.
+        requests.set_hold_ms(60_000);
+        requests.expire(1000 + 60_000 + 1);
+        assert_eq!(requests.views(1_000_000_000).len(), 1);
+        // Its source ending the turn cancels it for good.
+        requests.cancel("done-1");
+        assert!(requests.views(1_000_000_000).is_empty());
+    }
+
+    #[test]
+    fn an_unmarked_card_still_ages_out_of_the_hold() {
+        let requests = Requests::default();
+        let card = serde_json::json!({"title": "t"});
+        requests.register_native("wait-1".into(), card, 1000);
+        requests.expire(1000 + 600_000 + 1);
+        assert!(requests.views(1_000_000_000).is_empty());
+    }
 }

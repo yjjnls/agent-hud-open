@@ -571,6 +571,9 @@ fn done_card(sid: &str, title: &str, now: i64) -> Value {
         "sessionId": format!("{SOURCE}:{sid}"),
         "createdAt": created,
         "allowsAlways": false,
+        // The notice outlives the approval hold: the user is often away,
+        // and the next finished turn (or the user's own click) ends it.
+        "persistent": true,
         "kind": "question",
         "answersQuestion": false,
         "answerNote": l10n(
