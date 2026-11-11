@@ -34,17 +34,15 @@ export function useIslandNews(
       firstRun
         ? []
         : items.filter((event) => !seen.current!.has(event.id));
-    // Facts are consumed only by the screen the pointer is on. A background
-    // screen must not mark an event it never showed: the card would be lost
-    // once the user moves over there. Whichever screen the pointer comes to
-    // next replays what it missed — the first run still sets the baseline, so
-    // a window waking up never replays the whole backlog.
-    if (firstRun || underPointer) {
-      if (seen.current === null) seen.current = new Set();
-      for (const event of items) seen.current.add(event.id);
-      if (seen.current.size > 128)
-        seen.current = new Set(items.map((event) => event.id));
-    }
+    // News lands on every screen — the user reads whichever display they are
+    // facing, and a card that only the pointer's screen shows reads as
+    // "lost" on the rest. Each screen keeps its own seen set (the first run
+    // still sets the baseline, so a window waking up never replays the whole
+    // backlog); the pointer gates nothing here anymore.
+    if (seen.current === null) seen.current = new Set();
+    for (const event of items) seen.current.add(event.id);
+    if (seen.current.size > 128)
+      seen.current = new Set(items.map((event) => event.id));
     const freshRequests =
       seenRequests.current === null
         ? requests
@@ -58,7 +56,7 @@ export function useIslandNews(
       for (const request of requests) seenRequests.current.add(request.id);
     }
     const visible =
-      silenced || !underPointer
+      silenced
         ? []
         : fresh.filter(
             (event) =>
