@@ -11,7 +11,7 @@
 use agent_hud_runtime::requests::Requests;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -115,6 +115,10 @@ fn run(host: String, requests: Requests) {
             }
             let now = now_ms();
             let mut seen: HashMap<String, Row> = HashMap::new();
+            // Background jobs still running: their roster rows stay busy even
+            // when the live table reads idle (a turn gap), so a mid-task
+            // pause never raises a done card.
+            let mut working_jobs: HashSet<String> = HashSet::new();
             // The background-jobs table is the roster: every job's state.json
             // (the user's own name for the session, its last words, its fork
             // parent) persists after the process exits, so the HUD list
@@ -129,6 +133,9 @@ fn run(host: String, requests: Requests) {
                 let message = text(&job, "detail")
                     .or_else(|| job["output"]["result"].as_str().map(str::to_owned))
                     .unwrap_or_default();
+                if state == "working" {
+                    working_jobs.insert(sid.clone());
+                }
                 seen.insert(
                     sid,
                     Row {
@@ -145,7 +152,10 @@ fn run(host: String, requests: Requests) {
             // The live table overlays real-time truth on the roster: a job
             // still running in a terminal carries its busy/idle/shell phase,
             // a fresher rename, its real cwd. A job no process holds anymore
-            // just keeps its persisted row.
+            // just keeps its persisted row. One exception: a working job's
+            // own table-idle is a turn gap inside the task, not a finish —
+            // the roster's working state keeps the row busy, so the done
+            // card never fires between a background task's rounds.
             for row in table {
                 let Some(sid) = text(&row, "sessionId").filter(|s| s.len() >= 8) else {
                     continue;
@@ -157,7 +167,10 @@ fn run(host: String, requests: Requests) {
                     existing.name = name;
                 }
                 if let Some(status) = text(&row, "status") {
-                    existing.status = status;
+                    if live_status_should_overlay(working_jobs.get(&sid).map(|s| s.as_str()), &status)
+                    {
+                        existing.status = status;
+                    }
                 }
                 let live_stamp =
                     iso_stamp(&row, "statusUpdatedAt").max(iso_stamp(&row, "updatedAt"));
@@ -485,6 +498,14 @@ struct RaisedDone {
     stamp: i64,
     title: String,
     cancel_old: Option<i64>,
+}
+
+/// Whether the live table's `status` may overlay a roster row whose job is
+/// in `job_state`. A working job's own table-idle is a turn gap inside the
+/// task — overlaying it would read as a finish — so only that pair is held
+/// back; every other live phase (busy, shell, an idle on a done job) lands.
+fn live_status_should_overlay(job_state: Option<&str>, live_status: &str) -> bool {
+    !(job_state == Some("working") && live_status == "idle")
 }
 
 /// One round of the done-card quiet window over the seen table. Returns the
@@ -889,5 +910,19 @@ mod tests {
         assert_eq!(raised.len(), 1);
         assert_eq!(raised[0].stamp, 190_001);
         assert_eq!(raised[0].cancel_old, Some(99_000));
+    }
+
+    #[test]
+    fn a_working_jobs_table_idle_never_overlays_the_roster_busy() {
+        // The turn gap of a background task: the live table reads idle while
+        // the job is still working — the roster's busy must hold, so no done
+        // card fires mid-task.
+        assert!(!live_status_should_overlay(Some("working"), "idle"));
+        // Every other live phase lands: real work, a long shell, and the
+        // idle of a job that is done (or was never a job at all).
+        assert!(live_status_should_overlay(Some("working"), "busy"));
+        assert!(live_status_should_overlay(Some("working"), "shell"));
+        assert!(live_status_should_overlay(Some("done"), "idle"));
+        assert!(live_status_should_overlay(None, "idle"));
     }
 }
