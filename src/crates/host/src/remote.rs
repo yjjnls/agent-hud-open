@@ -205,6 +205,15 @@ fn run(host: String, requests: Requests) {
                     });
                 }
             }
+            // Fresh activity retires the old finish: a turn running again, a
+            // long shell, a question standing — any of them makes the last
+            // "turn finished" card stale, and the session's island keeps only
+            // its latest news. The stamp leaves dones with the card; a later
+            // finish re-raises through its own quiet window.
+            for (sid, stamp) in stale_dones(&seen, &waits, &dones) {
+                dones.remove(&sid);
+                requests.cancel(&done_id(&sid, stamp));
+            }
             // A session gone from the table loses its record file, which the
             // observers read as a session-forget and the HUD drops the row.
             // A launch also sweeps the records of a previous life: files the
@@ -506,6 +515,26 @@ struct RaisedDone {
 /// back; every other live phase (busy, shell, an idle on a done job) lands.
 fn live_status_should_overlay(job_state: Option<&str>, live_status: &str) -> bool {
     !(job_state == Some("working") && live_status == "idle")
+}
+
+/// Finishes whose card no longer deserves to stand: the session moved on
+/// (a new turn, a long shell, a question), so its island holds only the
+/// latest news. Returns the (sid, stamp) pairs the caller should cancel
+/// and forget.
+fn stale_dones(
+    seen: &HashMap<String, Row>,
+    waits: &HashMap<String, Wait>,
+    dones: &HashMap<String, i64>,
+) -> Vec<(String, i64)> {
+    seen.iter()
+        .filter_map(|(sid, row)| {
+            if row.status != "idle" || waits.contains_key(sid) {
+                dones.get(sid).map(|stamp| (sid.clone(), *stamp))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// One round of the done-card quiet window over the seen table. Returns the
@@ -924,5 +953,45 @@ mod tests {
         assert!(live_status_should_overlay(Some("working"), "shell"));
         assert!(live_status_should_overlay(Some("done"), "idle"));
         assert!(live_status_should_overlay(None, "idle"));
+    }
+
+    #[test]
+    fn fresh_activity_retires_a_sessions_old_finish_card() {
+        let busy = "8c03067d-1111".to_string();
+        let shell = "8c03067d-2222".to_string();
+        let waiting = "8c03067d-3333".to_string();
+        let resting = "8c03067d-4444".to_string();
+        let mut seen = HashMap::new();
+        seen.insert(busy.clone(), row("busy", 2000));
+        seen.insert(shell.clone(), row("shell", 2100));
+        seen.insert(waiting.clone(), row("idle", 2200));
+        seen.insert(resting.clone(), row("idle", 2300));
+        let mut waits = HashMap::new();
+        waits.insert(
+            waiting.clone(),
+            Wait { stamp: 2200, title: "w".into(), message: String::new() },
+        );
+        let dones: HashMap<String, i64> = [
+            (busy.clone(), 1000),
+            (shell.clone(), 1050),
+            (waiting.clone(), 1100),
+            (resting.clone(), 1150),
+            ("8c03067d-5555".to_string(), 1200), // gone from the table
+        ]
+        .into_iter()
+        .collect();
+        let mut stale = stale_dones(&seen, &waits, &dones);
+        stale.sort();
+        // Busy, shell, and the one with a standing question retire; the
+        // session still resting keeps its card, and a finish whose session
+        // is gone stays (its card outlives the table).
+        assert_eq!(
+            stale,
+            vec![
+                (busy.clone(), 1000),
+                (shell.clone(), 1050),
+                (waiting.clone(), 1100),
+            ]
+        );
     }
 }
