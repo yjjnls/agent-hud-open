@@ -55,6 +55,16 @@ export function useIslandNews(
       }
       for (const request of requests) seenRequests.current.add(request.id);
     }
+    // A finished turn that already holds its lasting card does not need a
+    // second, flashier one: the "new reply" flash and the durable card say
+    // the same thing about the same conversation, and both showing reads as
+    // two news items. The durable card wins — it carries the summary and
+    // the acknowledge button.
+    const doneSessionKeys = new Set(
+      requests
+        .filter((request) => request.id.includes("-done:"))
+        .map((request) => (request.sessionId ?? "").split(":").pop() ?? ""),
+    );
     const visible =
       silenced
         ? []
@@ -62,6 +72,10 @@ export function useIslandNews(
             (event) =>
               event.islandAlert !== false &&
               shown.includes(vendorKey(event.source)) &&
+              !(event.kind === "completion" &&
+                doneSessionKeys.has(
+                  (event.sessionId ?? "").split(":").pop() ?? "",
+                )) &&
               (event.kind !== "completion" ||
                 (services?.sources?.[sourceID(snapshot, event.source)]?.live !==
                   false &&

@@ -55,6 +55,20 @@ export function reconcileIslandCards(
   }
   for (const event of visible) {
     if (next[0]?.type === "request" && event.kind !== "completion") continue;
+    // A session's newer news retires its older: a churning loop task used
+    // to stack one "new reply" per finished turn, and the island kept
+    // replaying rounds of a conversation the user has moved past. The
+    // session id is the key; title is the fallback for events without one.
+    for (let index = next.length - 1; index >= 0; index--) {
+      const card = next[index];
+      const same =
+        card.type === "news" &&
+        card.event.kind === event.kind &&
+        card.event.source === event.source &&
+        (card.event.sessionId ?? card.event.title) ===
+          (event.sessionId ?? event.title);
+      if (same) next.splice(index, 1);
+    }
     next.push({
       type: "news",
       id: event.id,
