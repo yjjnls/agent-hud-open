@@ -24,9 +24,13 @@ export function compactAlertLabels(
   zh: boolean,
 ): { who: string; status: string; badge?: string } {
   if (request) {
+    // The session's own name leads: several remote cards can stand at once,
+    // and "Remote Claude" on every one of them hides which conversation is
+    // asking. Project and vendor names stay as fallbacks.
     const who =
-      projectName(request.cwd) ??
-      request.vendor ??
+      request.title.trim() ||
+      projectName(request.cwd) ||
+      request.vendor ||
       clientDisplayName(request.source);
     const status =
       request.kind === "question"
