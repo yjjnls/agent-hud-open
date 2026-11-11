@@ -648,6 +648,24 @@ export function HUDScene({
             light={light}
             botLogos={config.botLogos}
           />
+        ) : news.drained ? (
+          // The queue the user just read out: hold the surface open with a
+          // quiet row instead of collapsing under the pointer — the next
+          // hover-cycle to see pending cards is exactly what this saves.
+          <div
+            style={{
+              padding: "10px 16px",
+              fontSize: 11,
+              fontWeight: 500,
+              color: "rgba(255,255,255,0.4)",
+              textAlign: "center",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {snapshotLanguage(snapshot) === "zh"
+              ? "提示都读完了"
+              : "All caught up"}
+          </div>
         ) : null}
         <PendingEventRows
           queue={news.queue}

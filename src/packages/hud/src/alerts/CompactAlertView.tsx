@@ -34,9 +34,16 @@ export function compactAlertLabels(
       clientDisplayName(request.source);
     const status =
       request.kind === "question"
-        ? zh
-          ? "待回答"
-          : "Question"
+        ? request.id.includes("-done:")
+          ? // A finished turn's durable card rides the question channel too
+            // (no buttons to answer with); calling it "question" made the
+            // island ask the user for an answer that was never asked.
+            zh
+            ? "已结束"
+            : "Done"
+          : zh
+            ? "待回答"
+            : "Question"
         : request.kind === "plan"
           ? zh
             ? "计划待审"
