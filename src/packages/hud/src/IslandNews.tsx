@@ -97,23 +97,14 @@ export function useIslandNews(
     );
   }, [snapshot.islandEvents?.revision, requestIDs, silenced, underPointer]);
   const current = queue[0];
-  // Acknowledging the last card used to collapse the surface out from under
-  // the pointer: the queue emptied, the expanded body rendered null, and
-  // reading the next card cost another notch hover. A drained queue holds a
-  // quiet "all read" row instead, until the pointer leaves or news returns.
-  const [drained, setDrained] = useState(false);
-  const dismiss = () =>
-    setQueue((previous) => {
-      const next = dismissIslandCard(previous);
-      setDrained(next.length === 0);
-      return next;
-    });
-  useEffect(() => {
-    if (queue.length > 0) setDrained(false);
-  }, [queue.length]);
-  useEffect(() => {
-    if (!underPointer) setDrained(false);
-  }, [underPointer]);
+  // An emptied queue used to collapse the surface out from under the
+  // pointer — through whichever path the last card left: a news dismissal
+  // here, or an ask acknowledged in the client, whose removal happens in
+  // the host's approvals rather than this queue. While the pointer stays
+  // on the surface, an empty queue holds a quiet "all read" row instead;
+  // the pointer leaving (or a new card arriving) ends it.
+  const drained = queue.length === 0 && underPointer;
+  const dismiss = () => setQueue(dismissIslandCard);
   useEffect(() => {
     if (!current || held || current.type === "request") return;
     // A completion names a finished turn the user wants to catch before it
