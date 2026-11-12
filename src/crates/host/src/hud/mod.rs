@@ -73,6 +73,11 @@ struct Shared {
 struct HudState {
     /// None uses explicit ignoreCursor. Some(regions) gives this owner sole input control.
     regions: Option<Vec<InteractiveRegion>>,
+    /// The layout the pointer was last seen inside, kept briefly when a UI
+    /// change (an acknowledged card, a panel row) shrinks the regions out
+    /// from under it: judging outside on that alone reads as the HUD
+    /// slamming shut while the user is still mid-click.
+    shrunk_regions: Option<(Instant, Vec<InteractiveRegion>)>,
     last_ignore_cursor: Option<bool>,
     worker_started: bool,
     config: Option<HudConfig>,

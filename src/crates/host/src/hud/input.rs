@@ -39,7 +39,23 @@ pub async fn hud_report_regions(
             .lock()
             .map_err(|_| "HUD input owner is unavailable")?;
         shared.ensure_connected()?;
-        state.regions = Some(regions);
+        // When the layout shrinks away from under the pointer — a card the
+        // user just acknowledged, a row that left — the pointer's old spot
+        // lands outside the new regions. Keep the previous layout briefly:
+        // while it still holds the pointer, the sample reads inside, and the
+        // surface does not collapse out from under the user's hand.
+        let previous_regions = state.regions.replace(regions.clone());
+        if let Some(old) = previous_regions {
+            if let Ok(point) = pointer_in_viewport(&app, &window, state.geometry.as_ref()) {
+                let was_inside = region_contains(&old, point);
+                let is_inside = region_contains(&regions, point);
+                if was_inside && !is_inside {
+                    state.shrunk_regions = Some((Instant::now(), old));
+                } else if is_inside || old.len() <= regions.len() {
+                    state.shrunk_regions = None;
+                }
+            }
+        }
         let pointer = if window.is_visible().unwrap_or(false) {
             sample_pointer(&app, &window, &state, &shared)
         } else {
@@ -319,7 +335,18 @@ fn sample_pointer(
     outside.point = Some(point);
     let regions = state.regions.as_deref().unwrap_or_default();
     if !region_contains(regions, point) {
-        return outside;
+        // A layout that just shrank under the pointer gets a short grace:
+        // the user is still where they were clicking, and judging outside
+        // on the shrunken layout alone collapses the surface mid-action.
+        let graced = state
+            .shrunk_regions
+            .as_ref()
+            .is_some_and(|(at, old)| {
+                at.elapsed() < Duration::from_secs(2) && region_contains(old, point)
+            });
+        if !graced {
+            return outside;
+        }
     }
     let keys = pointer_keys();
     HudPointer {

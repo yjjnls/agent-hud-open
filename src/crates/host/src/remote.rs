@@ -69,10 +69,13 @@ struct Row {
 }
 
 /// A session's unanswered wait: the table stamp the wait began at, plus the
-/// words its card shows for as long as the wait lasts.
+/// words its card shows for as long as the wait lasts. The words are only
+/// read by the (currently unraised) ask card — kept for its return.
 struct Wait {
     stamp: i64,
+    #[allow(dead_code)]
     title: String,
+    #[allow(dead_code)]
     message: String,
 }
 
@@ -298,9 +301,11 @@ fn run(host: String, requests: Requests) {
             // A wait survives the table's idle/busy flicker: only a moved
             // stamp (the session changed phase — back to work, into a shell,
             // wherever) or a session gone from the table says the wait is
-            // over. Its card rides the wait: re-raising it every pass is
-            // free while it stands, brings it back when its hold ran out, and
-            // stays silent once the user has dismissed it themselves.
+            // over. The wait itself lights the session row (set_native_waiting
+            // below) and lives here for its bookkeeping, but raises no island
+            // card: an ask card's dismiss collapsed the surface under the
+            // pointer, and the panel's pending rows carry the same news
+            // without anything to click away.
             waits.retain(|sid, wait| match seen.get(sid) {
                 None => {
                     requests.cancel(&wait_id(sid));
@@ -310,14 +315,7 @@ fn run(host: String, requests: Requests) {
                     requests.cancel(&wait_id(sid));
                     false
                 }
-                Some(_) => {
-                    requests.register_native(
-                        wait_id(sid),
-                        wait_card(sid, &wait.title, &wait.message, now),
-                        now,
-                    );
-                    true
-                }
+                Some(_) => true,
             });
             // A finished-turn card lives the same way: it stands until the
             // session starts a new turn (stamp moved on while running) or
@@ -449,6 +447,10 @@ fn wait_id(sid: &str) -> String {
 /// question's header tag, since a card without buttons renders no title),
 /// the wait's message, and where the answer belongs. There are no answer
 /// buttons — the remote terminal is the only place to answer in.
+/// Currently unraised (the wait lights the session row instead — the ask
+/// card's dismiss collapsed the surface under the pointer); kept as the
+/// ready-made form for bringing ask cards back.
+#[allow(dead_code)]
 fn wait_card(sid: &str, title: &str, message: &str, now: i64) -> Value {
     let created = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now)
         .map(|dt| dt.to_rfc3339())
