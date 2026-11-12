@@ -159,12 +159,24 @@ export function CompactAlertView({
 
   const trailingWhat = request ? (
     <>
-      <Hand
-        size={glyphSize}
-        color={signalText}
-        fill={signalText}
-        style={{ flexShrink: 0 }}
-      />
+      {request.id.includes("-done:") ? (
+        // A finished turn raises its hand for nothing: the raised hand is
+        // the ask gesture, and it made the done card read as one more
+        // question waiting for an answer.
+        <Check
+          size={glyphSize}
+          strokeWidth={2.6}
+          color={turnText}
+          style={{ flexShrink: 0 }}
+        />
+      ) : (
+        <Hand
+          size={glyphSize}
+          color={signalText}
+          fill={signalText}
+          style={{ flexShrink: 0 }}
+        />
+      )}
       <span
         style={{
           fontSize: font,
