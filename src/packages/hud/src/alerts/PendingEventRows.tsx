@@ -31,6 +31,10 @@ export function permissionToolBadge(request: Approval): {
   badge: string;
   Icon: typeof Terminal;
 } {
+  // A finished turn's durable card rides the question channel, but it asks
+  // for nothing: an "ASK" badge on "the turn is over" read as one more
+  // prompt to deal with. It is a done notice first.
+  if (request.id.includes("-done:")) return { badge: "DONE", Icon: Sparkles };
   if (request.kind === "question" || request.toolName === "AskUserQuestion")
     return { badge: "ASK", Icon: HelpCircle };
   if (request.kind === "plan" || request.toolName === "ExitPlanMode")
