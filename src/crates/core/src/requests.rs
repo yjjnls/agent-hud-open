@@ -188,6 +188,37 @@ impl Requests {
             self.wake();
         }
     }
+    /// Every pending card whose id starts with `prefix` goes. A session's
+    /// channel keeps at most one standing card, and the ledger that would
+    /// name the stale stamp can itself be out of date (a restart, a race
+    /// between the quiet window and a row leaving) — so the re-register
+    /// sweeps the prefix first instead of trusting one remembered id.
+    pub fn cancel_prefixed(&self, prefix: &str) {
+        let dropped: Vec<_> = {
+            let mut state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
+            let mut kept = std::collections::VecDeque::with_capacity(state.pending.len());
+            let mut dropped = Vec::new();
+            while let Some(item) = state.pending.pop_front() {
+                if item.id.starts_with(prefix) {
+                    dropped.push(item.sender);
+                } else {
+                    kept.push_back(item);
+                }
+            }
+            if !dropped.is_empty() {
+                state.pending = kept;
+                state.revision = state.revision.wrapping_add(1);
+            }
+            dropped
+        };
+        if dropped.is_empty() {
+            return;
+        }
+        for sender in dropped {
+            let _ = sender.send(None);
+        }
+        self.wake();
+    }
     /// Explicit source settlement removes a dismissal as well as its live card.
     pub fn settle_native(&self, id: &str) {
         self.cancel(id);

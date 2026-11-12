@@ -264,6 +264,11 @@ fn run(host: String, requests: Requests) {
                 if let Some(old) = cancel_old {
                     requests.cancel(&done_id(&sid, old));
                 }
+                // The ledger can miss a stamp (a restart between finishes, a
+                // row leaving mid-window) and leave yesterday's card standing
+                // beside today's — the sweep makes one-per-session hold
+                // regardless of the bookkeeping.
+                requests.cancel_prefixed(&format!("{SOURCE}-done:{sid}:"));
                 requests.register_native(done_id(&sid, stamp), done_card(&sid, &title, now), now);
             }
             // Turn snapshots: every live session is reported each round, so
@@ -331,6 +336,7 @@ fn run(host: String, requests: Requests) {
                     false
                 }
                 Some(row) => {
+                    requests.cancel_prefixed(&format!("{SOURCE}-done:{sid}:"));
                     requests.register_native(
                         done_id(sid, *stamp),
                         done_card(sid, &row.name, now),
